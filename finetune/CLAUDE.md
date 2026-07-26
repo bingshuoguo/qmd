@@ -32,7 +32,7 @@ vec: another semantic variation
 
 The schema is enforced by `dataset/schema.py:TrainingExample` (Pydantic model). All data loading goes through `load_examples()` which fails loudly on invalid data. No format alternatives, no legacy fallbacks.
 
-**All `.jsonl` files in `data/` are concatenated and deduplicated for training runs.** The prepared train/val files in `data/train/` are ephemeral build artifacts.
+**All `.jsonl` files in `data/` are concatenated and deduplicated for training runs.** The prepared train/val files in `data/train/` are ephemeral build artifacts. Prepared records contain `prompt` and `completion`: their concatenation is the exact rendered Qwen sequence, while SFT masks every prompt/template token from loss.
 
 ## HuggingFace Repositories
 
@@ -54,7 +54,8 @@ The schema is enforced by `dataset/schema.py:TrainingExample` (Pydantic model). 
 | Script | Purpose |
 |--------|---------|
 | `dataset/schema.py` | Pydantic `TrainingExample` model + `load_examples()` |
-| `dataset/prepare_data.py` | Load via schema, apply Qwen3 chat template, dedup, split |
+| `dataset/prepare_data.py` | Load via schema, apply Qwen3 chat template, split prompt/completion, dedup, split |
+| `dataset/completion.py` | Preserve rendered tokens and build the completion-only loss mask |
 | `dataset/validate_schema.py` | Validate all JSONL files against schema |
 | `dataset/score_data.py` | Score all examples using reward.py |
 | `dataset/analyze_data.py` | Analyze distribution and quality |
@@ -66,11 +67,14 @@ Always use **Qwen3-1.7B** as the base model unless explicitly stated otherwise.
 ### Stage 0: Prepare Data
 
 ```bash
-uv run dataset/prepare_data.py
+uv run python -m dataset.prepare_data
 # Creates: data/train/train.jsonl, data/train/val.jsonl (ephemeral)
 ```
 
 ### Stage 1: SFT
+
+SFT uses `completion_only_loss=True`: the model sees the full chat prompt, but
+only the assistant's `hyde:/lex:/vec:` completion receives loss labels.
 
 ```bash
 # Local (requires CUDA)

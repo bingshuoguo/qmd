@@ -27,6 +27,7 @@ from dataset.schema import (
     load_examples,
     output_items_to_text,
 )
+from dataset.completion import split_rendered_text
 
 from transformers import AutoTokenizer
 
@@ -71,12 +72,13 @@ def format_for_training(ex: TrainingExample) -> dict:
 
     # Strip empty <think> tags — /no_think should suppress them
     text = text.replace("<think>\n\n</think>\n\n", "")
+    prompt, completion = split_rendered_text(text)
 
     return {
         "query": ex.query,
         "output": ex.output_as_lists(),
-        "text": text,
-        "messages": messages,
+        "prompt": prompt,
+        "completion": completion,
     }
 
 
@@ -157,10 +159,6 @@ def main():
             for item in data:
                 f.write(json.dumps(item) + "\n")
 
-    with open(output_dir / "train_chat.jsonl", "w") as f:
-        for item in train_data:
-            f.write(json.dumps({"messages": item["messages"]}) + "\n")
-
     # Stats
     short_final = sum(1 for ex in all_examples if len(ex.query.split()) <= 2)
     print(f"\n=== Summary ===")
@@ -174,7 +172,7 @@ def main():
         "train_samples": len(train_data),
         "val_samples": len(val_data),
         "short_query_pct": round(100 * short_final / len(all_examples), 1),
-        "columns": ["text", "messages"],
+        "columns": ["prompt", "completion"],
     }
     with open(output_dir / "dataset_info.json", "w") as f:
         json.dump(dataset_info, f, indent=2)
