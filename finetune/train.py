@@ -38,6 +38,8 @@ from pathlib import Path
 import yaml
 from transformers import TrainerCallback
 
+from dataset.completion import prepare_completion_dataset
+
 
 def export_gguf(model, tokenizer, output_dir: str, model_name: str):
     """Export model to GGUF at Q4_K_M, Q6_K, Q8_0 quantizations."""
@@ -230,6 +232,8 @@ def cmd_sft(args):
     dataset_name = cfg["dataset"]["name"]
     print(f"Loading dataset: {dataset_name}...")
 
+    prepared_validation = None
+
     # Support local JSONL files and glob patterns
     if dataset_name.startswith("data/") or dataset_name.endswith(".jsonl"):
         from pathlib import Path
@@ -248,19 +252,42 @@ def cmd_sft(args):
             data_path = Path(dataset_name)
             if data_path.is_dir():
                 train_file = data_path / "train.jsonl"
-                dataset = load_dataset(
-                    "json", data_files=str(train_file), split="train"
+                val_file = data_path / "val.jsonl"
+                if not train_file.is_file() or not val_file.is_file():
+                    raise ValueError(
+                        f"Prepared dataset directory must contain train.jsonl and val.jsonl: "
+                        f"{data_path}"
+                    )
+                prepared = load_dataset(
+                    "json",
+                    data_files={
+                        "train": str(train_file),
+                        "validation": str(val_file),
+                    },
                 )
+                dataset = prepared["train"]
+                prepared_validation = prepared["validation"]
             else:
                 dataset = load_dataset("json", data_files=dataset_name, split="train")
     else:
-        dataset = load_dataset(dataset_name, split=cfg["dataset"]["split"])
-    print(f"Dataset loaded: {len(dataset)} examples")
+        prepared = load_dataset(dataset_name)
+        dataset = prepared[cfg["dataset"]["split"]]
+        for validation_name in ("validation", "val", "test"):
+            if validation_name in prepared:
+                prepared_validation = prepared[validation_name]
+                break
+    print(f"Dataset loaded: {len(dataset)} training examples")
 
-    dataset = dataset.shuffle(seed=42)
-    split = dataset.train_test_split(test_size=cfg["dataset"]["eval_split"], seed=42)
-    train_dataset = split["train"]
-    eval_dataset = split["test"]
+    if prepared_validation is None:
+        dataset = dataset.shuffle(seed=42)
+        split = dataset.train_test_split(
+            test_size=cfg["dataset"]["eval_split"], seed=42
+        )
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
+    else:
+        train_dataset = dataset
+        eval_dataset = prepared_validation
     print(f"  Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
 
     # Check if output looks like a HF Hub path (contains /)
@@ -332,6 +359,7 @@ def cmd_sft(args):
             "ddp_find_unused_parameters", False
         ),
         bf16=True,
+        completion_only_loss=True,
         report_to=report_to,
         run_name=run_name if report_to == "trackio" else None,
     )
@@ -354,6 +382,14 @@ def cmd_sft(args):
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+
+    max_length = cfg["training"]["max_length"]
+    train_dataset = prepare_completion_dataset(
+        train_dataset, tokenizer, max_length, "train"
+    )
+    eval_dataset = prepare_completion_dataset(
+        eval_dataset, tokenizer, max_length, "eval"
+    )
 
     print("Initializing SFT trainer...")
     trainer = SFTTrainer(

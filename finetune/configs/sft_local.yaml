@@ -8,8 +8,9 @@ model:
 
 dataset:
   name: "data/train"  # Local path
-  text_field: "text"
   split: "train"
+  # Used only when loading a single file or a Hub split. Prepared local
+  # directories use their fixed train.jsonl and val.jsonl files.
   eval_split: 0.1
 
 training:

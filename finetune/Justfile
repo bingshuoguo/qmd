@@ -1,25 +1,28 @@
 set shell := ["bash", "-uc"]
 
 validate:
-    uv run dataset/validate_schema.py
-    uv run dataset/score_data.py
+    uv run python -m dataset.validate_schema
+    uv run python -m dataset.score_data
     for f in data/*.jsonl; do \
-      uv run dataset/analyze_data.py --input "$f" --show-examples 0; \
+      uv run python -m dataset.analyze_data --input "$f" --show-examples 0; \
     done
 
 score:
-    uv run dataset/score_data.py
+    uv run python -m dataset.score_data
 
 schema:
-    uv run dataset/validate_schema.py
+    uv run python -m dataset.validate_schema
 
 analyze:
     for f in data/*.jsonl; do \
-      uv run dataset/analyze_data.py --input "$f" --show-examples 0; \
+      uv run python -m dataset.analyze_data --input "$f" --show-examples 0; \
     done
 
 prepare:
-    QMD_BASE_MODEL=Qwen/Qwen3-1.7B uv run dataset/prepare_data.py --seed 42
+    QMD_BASE_MODEL=Qwen/Qwen3-1.7B uv run python -m dataset.prepare_data --seed 42
+
+test-completion:
+    uv run python -m unittest discover -s tests -p 'test_*.py'
 
 convert-onnx size="1.7B":
     uv run convert_onnx.py --size {{size}}
@@ -37,4 +40,3 @@ train-local:
 #
 # grpo-local:
 #   HF_TOKEN=${HF_TOKEN} uv run train.py grpo --config experiments/grpo/grpo.yaml |& tee /tmp/qmd-grpo-train.log
-

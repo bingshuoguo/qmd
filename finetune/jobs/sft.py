@@ -26,6 +26,58 @@ from huggingface_hub import login
 BASE_MODEL = "Qwen/Qwen3-1.7B"
 OUTPUT_MODEL = "tobil/qmd-query-expansion-1.7B-sft"
 DATASET = "tobil/qmd-query-expansion-train"
+MAX_LENGTH = 512
+ASSISTANT_MARKER = "<|im_start|>assistant\n"
+
+
+def split_rendered_text(text):
+    """Split a rendered Qwen conversation after its sole assistant header."""
+    occurrences = text.count(ASSISTANT_MARKER)
+    if occurrences != 1:
+        raise ValueError(
+            f"Expected exactly one Qwen assistant header, found {occurrences}."
+        )
+    boundary = text.index(ASSISTANT_MARKER) + len(ASSISTANT_MARKER)
+    prompt, completion = text[:boundary], text[boundary:]
+    if not prompt or not completion:
+        raise ValueError("Prompt and completion must both be non-empty.")
+    return prompt, completion
+
+
+def tokenize_completion_example(example, tokenizer):
+    """Preserve the rendered token sequence and supervise only its completion."""
+    prompt = example.get("prompt")
+    completion = example.get("completion")
+    if not (
+        isinstance(prompt, str)
+        and prompt
+        and isinstance(completion, str)
+        and completion
+    ):
+        text = example.get("text")
+        if not isinstance(text, str) or not text:
+            raise ValueError(
+                "Example must contain prompt/completion or a legacy text field."
+            )
+        prompt, completion = split_rendered_text(text)
+
+    prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    input_ids = tokenizer(prompt + completion, add_special_tokens=False)["input_ids"]
+    if input_ids[: len(prompt_ids)] != prompt_ids:
+        raise ValueError(
+            "Prompt tokenization is not a prefix of prompt + completion tokenization."
+        )
+    if len(input_ids) <= len(prompt_ids):
+        raise ValueError("Completion has no token after tokenization.")
+    if len(input_ids) > MAX_LENGTH:
+        raise ValueError(
+            f"Example has {len(input_ids)} tokens, exceeding max_length={MAX_LENGTH}."
+        )
+    return {
+        "input_ids": input_ids,
+        "completion_mask": [0] * len(prompt_ids)
+        + [1] * (len(input_ids) - len(prompt_ids)),
+    }
 
 hf_token = os.environ.get("HF_TOKEN")
 if hf_token:
@@ -36,15 +88,38 @@ from peft import LoraConfig
 from transformers import AutoTokenizer
 from trl import SFTTrainer, SFTConfig
 
+tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
 # Load and split dataset
 print(f"Loading dataset: {DATASET}...")
-dataset = load_dataset(DATASET, split="train")
-print(f"Dataset loaded: {len(dataset)} examples")
+dataset = load_dataset(DATASET)
+train_dataset = dataset["train"]
+eval_dataset = None
+for validation_name in ("validation", "val", "test"):
+    if validation_name in dataset:
+        eval_dataset = dataset[validation_name]
+        break
+if eval_dataset is None:
+    split = train_dataset.train_test_split(test_size=0.1, seed=42)
+    train_dataset = split["train"]
+    eval_dataset = split["test"]
 
-split = dataset.train_test_split(test_size=0.1, seed=42)
-train_dataset = split["train"]
-eval_dataset = split["test"]
-print(f"  Train: {len(train_dataset)}, Eval: {len(eval_dataset)}")
+print(f"Dataset loaded: {len(train_dataset)} train, {len(eval_dataset)} eval")
+train_dataset = train_dataset.map(
+    tokenize_completion_example,
+    fn_kwargs={"tokenizer": tokenizer},
+    remove_columns=train_dataset.column_names,
+    desc="Tokenizing train dataset",
+)
+eval_dataset = eval_dataset.map(
+    tokenize_completion_example,
+    fn_kwargs={"tokenizer": tokenizer},
+    remove_columns=eval_dataset.column_names,
+    desc="Tokenizing eval dataset",
+)
+print(f"Tokenized: {len(train_dataset)} train, {len(eval_dataset)} eval")
 
 # SFT config
 config = SFTConfig(
@@ -57,7 +132,7 @@ config = SFTConfig(
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=2e-4,
-    max_length=512,
+    max_length=MAX_LENGTH,
 
     logging_steps=10,
     save_strategy="steps",
@@ -69,6 +144,7 @@ config = SFTConfig(
     warmup_ratio=0.03,
     lr_scheduler_type="cosine",
     bf16=True,
+    completion_only_loss=True,
 
     report_to="none",
 )
@@ -90,6 +166,7 @@ trainer = SFTTrainer(
     eval_dataset=eval_dataset,
     args=config,
     peft_config=peft_config,
+    processing_class=tokenizer,
 )
 
 print("Starting SFT training...")
@@ -114,8 +191,5 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_common import run_eval
 
 print("\nStarting automatic evaluation...")
-eval_tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
-if eval_tokenizer.pad_token is None:
-    eval_tokenizer.pad_token = eval_tokenizer.eos_token
 trainer.model.eval()
-run_eval(trainer.model, eval_tokenizer, "sft")
+run_eval(trainer.model, tokenizer, "sft")
