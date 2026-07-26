@@ -102,7 +102,8 @@ finetune/
 │   └── grpo/          # Experimental GRPO configuration and script (optional)
 ├── data/              # Training JSONL files (all concatenated for training)
 ├── dataset/
-│   ├── prepare_data.py     # Format for Qwen3 chat template, dedup, split
+│   ├── prepare_data.py     # Format Qwen3 prompt/completion records, dedup, split
+│   ├── completion.py       # Exact tokenization + completion-only loss mask
 │   ├── schema.py           # Parse/normalize output format
 │   ├── validate_schema.py  # Validate JSONL against schema
 │   ├── score_data.py       # Score all examples using reward.py
@@ -116,6 +117,9 @@ finetune/
 ### Stage 1: SFT (Supervised Fine-Tuning)
 
 Teaches the model the `lex:/vec:/hyde:` output format from labeled examples.
+The full rendered chat prompt remains model input, but
+`completion_only_loss=True` masks user and template tokens so only the
+assistant expansion is supervised.
 
 | Parameter | Value |
 |-----------|-------|
@@ -220,8 +224,8 @@ ollama run qmd-expand
 All JSONL files in `data/` are concatenated for training. To prepare for training:
 
 ```bash
-# Format for Qwen3 chat template, deduplicate, split train/val
-uv run dataset/prepare_data.py
+# Format prompt/completion records, deduplicate, split train/val
+uv run python -m dataset.prepare_data
 
 # Validate data quality
 just validate
@@ -262,4 +266,3 @@ deterministic, and suitable as an RL signal. See `SCORING.md` for the full rubri
 
 > GRPO scores are not tracked in this branch; see `experiments/grpo/` for historical
 > experimental results.
-
