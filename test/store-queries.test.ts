@@ -24,6 +24,9 @@ import {
   countActiveDocuments,
   countContentVectors,
   getLatestDocumentModifiedAt,
+  findDocumentRef,
+  getDocumentHash,
+  getDocumentContent,
   type Store,
 } from "../src/store.js";
 
@@ -118,5 +121,59 @@ describe("getLatestDocumentModifiedAt", () => {
     // Inactive documents are excluded from the MAX.
     db.prepare(`UPDATE documents SET active = 0 WHERE path = 'new.md'`).run();
     expect(getLatestDocumentModifiedAt(db)).toBe("2020-01-01T00:00:00.000Z");
+  });
+});
+
+describe("findDocumentRef", () => {
+  test("resolves a qmd:// virtual path by exact collection+path", async () => {
+    await seedDoc("c1", "a/b.md", { body: "hello body" });
+    const ref = findDocumentRef(db, "qmd://c1/a/b.md");
+    expect(ref).not.toBeNull();
+    expect(ref?.collection).toBe("c1");
+    expect(ref?.path).toBe("a/b.md");
+    expect(ref?.virtual_path).toBe("qmd://c1/a/b.md");
+    expect(ref?.body_length).toBe("hello body".length);
+  });
+
+  test("resolves a bare path by exact match", async () => {
+    await seedDoc("c1", "a/b.md");
+    expect(findDocumentRef(db, "a/b.md")?.path).toBe("a/b.md");
+  });
+
+  test("falls back to suffix match when there is no exact path", async () => {
+    await seedDoc("c1", "a/b.md");
+    expect(findDocumentRef(db, "b.md")?.path).toBe("a/b.md");
+  });
+
+  test("returns null when nothing matches", async () => {
+    await seedDoc("c1", "a/b.md");
+    expect(findDocumentRef(db, "nope.md")).toBeNull();
+  });
+
+  test("excludes inactive documents", async () => {
+    await seedDoc("c1", "a/b.md", { active: 0 });
+    expect(findDocumentRef(db, "a/b.md")).toBeNull();
+    expect(findDocumentRef(db, "qmd://c1/a/b.md")).toBeNull();
+  });
+});
+
+describe("getDocumentHash", () => {
+  test("returns the content hash for an active doc, null otherwise", async () => {
+    const hash = await seedDoc("c1", "a.md");
+    expect(getDocumentHash(db, "c1", "a.md")).toBe(hash);
+    expect(getDocumentHash(db, "c1", "missing.md")).toBeNull();
+  });
+});
+
+describe("getDocumentContent", () => {
+  test("returns body + title for an active doc", async () => {
+    await seedDoc("c1", "a.md", { title: "My Title", body: "# My Title\n\ncontent here" });
+    const doc = getDocumentContent(db, "c1", "a.md");
+    expect(doc?.title).toBe("My Title");
+    expect(doc?.body).toBe("# My Title\n\ncontent here");
+  });
+
+  test("returns null for a missing doc", () => {
+    expect(getDocumentContent(db, "c1", "missing.md")).toBeNull();
   });
 });

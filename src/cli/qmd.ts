@@ -81,6 +81,9 @@ import {
   countActiveDocuments,
   countContentVectors,
   getLatestDocumentModifiedAt,
+  findDocumentRef,
+  getDocumentHash,
+  getDocumentContent,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -1084,53 +1087,8 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     const names = pattern.split(',').map(s => s.trim()).filter(Boolean);
     files = [];
     for (const name of names) {
-      let doc: { virtual_path: string; body_length: number; collection: string; path: string } | null = null;
-
-      // Handle virtual paths
-      if (isVirtualPath(name)) {
-        const parsed = parseVirtualPath(name);
-        if (parsed) {
-          // Try exact match on collection + path
-          doc = db.prepare(`
-            SELECT
-              'qmd://' || d.collection || '/' || d.path as virtual_path,
-              LENGTH(content.doc) as body_length,
-              d.collection,
-              d.path
-            FROM documents d
-            JOIN content ON content.hash = d.hash
-            WHERE d.collection = ? AND d.path = ? AND d.active = 1
-          `).get(parsed.collectionName, parsed.path) as typeof doc;
-        }
-      } else {
-        // Try exact match on path
-        doc = db.prepare(`
-          SELECT
-            'qmd://' || d.collection || '/' || d.path as virtual_path,
-            LENGTH(content.doc) as body_length,
-            d.collection,
-            d.path
-          FROM documents d
-          JOIN content ON content.hash = d.hash
-          WHERE d.path = ? AND d.active = 1
-          LIMIT 1
-        `).get(name) as { virtual_path: string; body_length: number; collection: string; path: string } | null;
-
-        // Try suffix match
-        if (!doc) {
-          doc = db.prepare(`
-            SELECT
-              'qmd://' || d.collection || '/' || d.path as virtual_path,
-              LENGTH(content.doc) as body_length,
-              d.collection,
-              d.path
-            FROM documents d
-            JOIN content ON content.hash = d.hash
-            WHERE d.path LIKE ? AND d.active = 1
-            LIMIT 1
-          `).get(`%${name}`) as { virtual_path: string; body_length: number; collection: string; path: string } | null;
-        }
-      }
+      // Resolve qmd:// exact, path exact, then path suffix (store.findDocumentRef).
+      const doc = findDocumentRef(db, name);
 
       if (doc) {
         files.push({
@@ -1178,12 +1136,8 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     const context = collection && path ? getContextForPath(db, collection, path) : null;
 
     // Resolve docid (first 6 chars of content hash) so every entry can be cited.
-    const docidRow = collection && path ? db.prepare(`
-      SELECT d.hash as hash
-      FROM documents d
-      WHERE d.collection = ? AND d.path = ? AND d.active = 1
-    `).get(collection, path) as { hash: string } | null : null;
-    const docid = docidRow?.hash ? docidRow.hash.slice(0, 6) : undefined;
+    const docHash = collection && path ? getDocumentHash(db, collection, path) : null;
+    const docid = docHash ? docHash.slice(0, 6) : undefined;
 
     // --full-path: resolve the on-disk path when it exists (else fall back).
     // Display as ./-prefixed relative path when under $PWD; absolute realpath
@@ -1213,12 +1167,7 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     // Fetch document content using collection and path
     if (!collection || !path) continue;
 
-    const doc = db.prepare(`
-      SELECT content.doc as body, d.title
-      FROM documents d
-      JOIN content ON content.hash = d.hash
-      WHERE d.collection = ? AND d.path = ? AND d.active = 1
-    `).get(collection, path) as { body: string; title: string } | null;
+    const doc = getDocumentContent(db, collection, path);
 
     if (!doc) continue;
 

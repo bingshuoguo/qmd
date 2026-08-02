@@ -2999,6 +2999,92 @@ export function getLatestDocumentModifiedAt(db: Database): string | null {
   return (db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null }).latest;
 }
 
+/**
+ * Resolve a single document reference from the CLI multi-get comma-list syntax:
+ * a qmd:// virtual path (exact collection+path), else an exact path, else a
+ * path suffix. Verbatim relocation of the three inline lookups that used to
+ * live in qmd.ts's multiGet. Returns null when nothing matches.
+ *
+ * NOTE: deliberately distinct from findDocuments() — that resolves glob/comma
+ * patterns into full result sets (optionally with bodies); this resolves one
+ * name to its {collection,path,hash,length} ref WITHOUT the body. See spec §8.3.
+ */
+export function findDocumentRef(
+  db: Database,
+  name: string
+): { virtual_path: string; body_length: number; collection: string; path: string } | null {
+  type DocRef = { virtual_path: string; body_length: number; collection: string; path: string };
+
+  if (isVirtualPath(name)) {
+    const parsed = parseVirtualPath(name);
+    if (!parsed) return null;
+    return (db.prepare(`
+      SELECT
+        'qmd://' || d.collection || '/' || d.path as virtual_path,
+        LENGTH(content.doc) as body_length,
+        d.collection,
+        d.path
+      FROM documents d
+      JOIN content ON content.hash = d.hash
+      WHERE d.collection = ? AND d.path = ? AND d.active = 1
+    `).get(parsed.collectionName, parsed.path) as DocRef | undefined) ?? null;
+  }
+
+  // Try exact match on path
+  let doc = (db.prepare(`
+    SELECT
+      'qmd://' || d.collection || '/' || d.path as virtual_path,
+      LENGTH(content.doc) as body_length,
+      d.collection,
+      d.path
+    FROM documents d
+    JOIN content ON content.hash = d.hash
+    WHERE d.path = ? AND d.active = 1
+    LIMIT 1
+  `).get(name) as DocRef | undefined) ?? null;
+
+  // Try suffix match
+  if (!doc) {
+    doc = (db.prepare(`
+      SELECT
+        'qmd://' || d.collection || '/' || d.path as virtual_path,
+        LENGTH(content.doc) as body_length,
+        d.collection,
+        d.path
+      FROM documents d
+      JOIN content ON content.hash = d.hash
+      WHERE d.path LIKE ? AND d.active = 1
+      LIMIT 1
+    `).get(`%${name}`) as DocRef | undefined) ?? null;
+  }
+
+  return doc;
+}
+
+/**
+ * SELECT d.hash FROM documents WHERE collection+path AND active=1.
+ * Source of a document's docid (first 6 hash chars). Distinct from
+ * findDocuments(): returns only the hash, no body. See spec §8.3.
+ */
+export function getDocumentHash(db: Database, collection: string, path: string): string | null {
+  const row = db.prepare(`
+    SELECT d.hash as hash
+    FROM documents d
+    WHERE d.collection = ? AND d.path = ? AND d.active = 1
+  `).get(collection, path) as { hash: string } | null;
+  return row?.hash ?? null;
+}
+
+/** SELECT content.doc AS body, d.title WHERE collection+path AND active=1. */
+export function getDocumentContent(db: Database, collection: string, path: string): { body: string; title: string } | null {
+  return (db.prepare(`
+    SELECT content.doc as body, d.title
+    FROM documents d
+    JOIN content ON content.hash = d.hash
+    WHERE d.collection = ? AND d.path = ? AND d.active = 1
+  `).get(collection, path) as { body: string; title: string } | undefined) ?? null;
+}
+
 // =============================================================================
 // Context
 // =============================================================================
