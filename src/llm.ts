@@ -1451,48 +1451,39 @@ export class LlamaCpp implements LLM {
   // High-level abstractions
   // ==========================================================================
 
-  async expandQuery(query: string, options: { context?: string, includeLexical?: boolean, intent?: string } = {}): Promise<Queryable[]> {
+  /**
+   * Generate one grammar-constrained expansion response without parsing or
+   * fallback. Benchmark artifact generation uses this to preserve the exact
+   * model output and classify failures outside the production search path.
+   */
+  async generateQueryExpansionRaw(
+    query: string,
+    options: { intent?: string } = {},
+  ): Promise<string> {
     if (this._ciMode) throw new Error("LLM operations are disabled in CI (set CI=true)");
-    // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 
     const llama = await this.ensureLlama();
     await this.ensureGenerateModel();
-
-    const includeLexical = options.includeLexical ?? true;
-    const context = options.context;
-
-    const intent = options.intent;
-    const prompt = intent
-      ? `/no_think Expand this search query: ${query}\nQuery intent: ${intent}`
+    const prompt = options.intent
+      ? `/no_think Expand this search query: ${query}\nQuery intent: ${options.intent}`
       : `/no_think Expand this search query: ${query}`;
-
-    // Set up inside the try so any failure (grammar creation, context
-    // allocation/VRAM, session prompt) falls back to the original query
-    // instead of propagating and failing the caller's operation.
-    let genContext: Awaited<ReturnType<LlamaModel["createContext"]>> | undefined;
-    try {
-      const grammar = await llama.createGrammar({
-        grammar: `
+    const grammar = await llama.createGrammar({
+      grammar: `
         root ::= line+
         line ::= type ": " content "\\n"
         type ::= "lex" | "vec" | "hyde"
         content ::= [^\\n]+
-      `
-      });
-
-      // Create a bounded context for expansion to prevent large default VRAM allocations.
-      genContext = await this.generateModel!.createContext({
-        contextSize: this.expandContextSize,
-      });
-      const sequence = genContext.getSequence();
+      `,
+    });
+    const context = await this.generateModel!.createContext({
+      contextSize: this.expandContextSize,
+    });
+    try {
+      const sequence = context.getSequence();
       const { LlamaChatSession } = await loadNodeLlamaCpp();
       const session = new LlamaChatSession({ contextSequence: sequence });
-
-      // Qwen3 recommended settings for non-thinking mode:
-      // temp=0.7, topP=0.8, topK=20, presence_penalty for repetition
-      // DO NOT use greedy decoding (temp=0) - causes infinite loops
-      const result = await session.prompt(prompt, {
+      return await session.prompt(prompt, {
         grammar,
         maxTokens: 600,
         temperature: 0.7,
@@ -1503,6 +1494,24 @@ export class LlamaCpp implements LLM {
           presencePenalty: 0.5,
         },
       });
+    } finally {
+      await context.dispose();
+    }
+  }
+
+  async expandQuery(query: string, options: { context?: string, includeLexical?: boolean, intent?: string } = {}): Promise<Queryable[]> {
+    if (this._ciMode) throw new Error("LLM operations are disabled in CI (set CI=true)");
+    // Ping activity at start to keep models alive during this operation
+    this.touchActivity();
+
+    await this.ensureLlama();
+    await this.ensureGenerateModel();
+
+    const includeLexical = options.includeLexical ?? true;
+    const context = options.context;
+
+    try {
+      const result = await this.generateQueryExpansionRaw(query, { intent: options.intent });
 
       const lines = result.trim().split("\n");
       const queryLower = query.toLowerCase();
@@ -1540,8 +1549,6 @@ export class LlamaCpp implements LLM {
       const fallback: Queryable[] = [{ type: 'vec', text: query }];
       if (includeLexical) fallback.unshift({ type: 'lex', text: query });
       return fallback;
-    } finally {
-      if (genContext) await genContext.dispose();
     }
   }
 
