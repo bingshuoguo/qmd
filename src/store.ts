@@ -3085,6 +3085,44 @@ export function getDocumentContent(db: Database, collection: string, path: strin
   `).get(collection, path) as { body: string; title: string } | undefined) ?? null;
 }
 
+/** SELECT COUNT(*) FROM documents WHERE collection=? AND active=1. */
+export function countDocumentsInCollection(db: Database, collection: string): number {
+  return (db.prepare(`
+    SELECT COUNT(*) as file_count
+    FROM documents d
+    WHERE d.collection = ? AND d.active = 1
+  `).get(collection) as { file_count: number }).file_count;
+}
+
+/**
+ * List active documents in a collection with title/mtime/size, ordered by path.
+ * Optional pathPrefix restricts to paths under it (LIKE prefix%). Verbatim
+ * relocation of qmd.ts's listFiles query (both variants).
+ */
+export function listDocumentsWithMeta(
+  db: Database,
+  collection: string,
+  pathPrefix?: string
+): { path: string; title: string; modified_at: string; size: number }[] {
+  type Row = { path: string; title: string; modified_at: string; size: number };
+  if (pathPrefix) {
+    return db.prepare(`
+      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
+      FROM documents d
+      JOIN content ct ON d.hash = ct.hash
+      WHERE d.collection = ? AND d.path LIKE ? AND d.active = 1
+      ORDER BY d.path
+    `).all(collection, `${pathPrefix}%`) as Row[];
+  }
+  return db.prepare(`
+    SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
+    FROM documents d
+    JOIN content ct ON d.hash = ct.hash
+    WHERE d.collection = ? AND d.active = 1
+    ORDER BY d.path
+  `).all(collection) as Row[];
+}
+
 // =============================================================================
 // Context
 // =============================================================================

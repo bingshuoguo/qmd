@@ -1,5 +1,5 @@
 import { isBun, openDatabase } from "../db.js";
-import type { Database, SQLiteValue } from "../db.js";
+import type { Database } from "../db.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -84,6 +84,8 @@ import {
   findDocumentRef,
   getDocumentHash,
   getDocumentContent,
+  countDocumentsInCollection,
+  listDocumentsWithMeta,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -1311,17 +1313,12 @@ function listFiles(pathArg?: string): void {
       return;
     }
 
-    // Get file counts from database for each collection
+    // Get file counts from database for each collection (YAML iteration kept so
+    // zero-document collections still show "0 files").
     const collections = yamlCollections.map(coll => {
-      const stats = db.prepare(`
-        SELECT COUNT(*) as file_count
-        FROM documents d
-        WHERE d.collection = ? AND d.active = 1
-      `).get(coll.name) as { file_count: number } | null;
-
       return {
         name: coll.name,
-        file_count: stats?.file_count || 0
+        file_count: countDocumentsInCollection(db, coll.name)
       };
     });
 
@@ -1405,32 +1402,7 @@ function listFiles(pathArg?: string): void {
   }
 
   // List files in the collection with size and modification time
-  let query: string;
-  let params: SQLiteValue[];
-
-  if (pathPrefix) {
-    // List files under a specific path
-    query = `
-      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
-      FROM documents d
-      JOIN content ct ON d.hash = ct.hash
-      WHERE d.collection = ? AND d.path LIKE ? AND d.active = 1
-      ORDER BY d.path
-    `;
-    params = [coll.name, `${pathPrefix}%`];
-  } else {
-    // List all files in the collection
-    query = `
-      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
-      FROM documents d
-      JOIN content ct ON d.hash = ct.hash
-      WHERE d.collection = ? AND d.active = 1
-      ORDER BY d.path
-    `;
-    params = [coll.name];
-  }
-
-  const files = db.prepare(query).all(...params) as { path: string; title: string; modified_at: string; size: number }[];
+  const files = listDocumentsWithMeta(db, coll.name, pathPrefix ?? undefined);
 
   if (files.length === 0) {
     if (pathPrefix) {
