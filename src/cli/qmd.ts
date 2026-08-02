@@ -1,5 +1,5 @@
 import { isBun, openDatabase } from "../db.js";
-import type { Database, SQLiteValue } from "../db.js";
+import type { Database } from "../db.js";
 import fastGlob from "fast-glob";
 import { execSync, spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
@@ -77,6 +77,21 @@ import {
   generateEmbeddings,
   maybeAdoptLegacyEmbeddingFingerprint,
   syncConfigToDb,
+  invalidateConfigCache,
+  countActiveDocuments,
+  countContentVectors,
+  getLatestDocumentModifiedAt,
+  findDocumentRef,
+  getDocumentHash,
+  getDocumentContent,
+  countDocumentsInCollection,
+  listDocumentsWithMeta,
+  hasVectorTable,
+  sampleEmbeddedChunks,
+  getStoredEmbedding,
+  getSqliteVersion,
+  getVecVersion,
+  getEmbeddingFingerprintGroups,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -155,7 +170,7 @@ function resyncConfig(): void {
   try {
     const config = loadConfig();
     // Clear config hash to force re-sync
-    s.db.prepare(`DELETE FROM store_config WHERE key = 'config_hash'`).run();
+    invalidateConfigCache(s.db);
     syncConfigToDb(s.db, config);
   } catch {
     // Config may not exist — that's fine
@@ -481,13 +496,13 @@ async function showStatus(): Promise<void> {
   const collections = listCollections(db);
 
   // Overall stats
-  const totalDocs = db.prepare(`SELECT COUNT(*) as count FROM documents WHERE active = 1`).get() as { count: number };
-  const vectorCount = db.prepare(`SELECT COUNT(*) as count FROM content_vectors`).get() as { count: number };
+  const totalDocs = countActiveDocuments(db);
+  const vectorCount = countContentVectors(db);
   const statusEmbedModel = resolveEmbedModelForCli();
   const needsEmbedding = getHashesNeedingEmbedding(db, undefined, statusEmbedModel);
 
   // Most recent update across all collections
-  const mostRecent = db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null };
+  const mostRecent = getLatestDocumentModifiedAt(db);
 
   console.log(`${c.bold}QMD Status${c.reset}\n`);
   console.log(`Index: ${dbPath}`);
@@ -511,13 +526,13 @@ async function showStatus(): Promise<void> {
   console.log("");
 
   console.log(`${c.bold}Documents${c.reset}`);
-  console.log(`  Total:    ${totalDocs.count} files indexed`);
-  console.log(`  Vectors:  ${vectorCount.count} embedded`);
+  console.log(`  Total:    ${totalDocs} files indexed`);
+  console.log(`  Vectors:  ${vectorCount} embedded`);
   if (needsEmbedding > 0) {
     console.log(`  ${c.yellow}Pending:  ${needsEmbedding} need embedding${c.reset} (run 'qmd embed')`);
   }
-  if (mostRecent.latest) {
-    const lastUpdate = new Date(mostRecent.latest);
+  if (mostRecent) {
+    const lastUpdate = new Date(mostRecent);
     console.log(`  Updated:  ${formatTimeAgo(lastUpdate)}`);
   }
 
@@ -1080,53 +1095,8 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     const names = pattern.split(',').map(s => s.trim()).filter(Boolean);
     files = [];
     for (const name of names) {
-      let doc: { virtual_path: string; body_length: number; collection: string; path: string } | null = null;
-
-      // Handle virtual paths
-      if (isVirtualPath(name)) {
-        const parsed = parseVirtualPath(name);
-        if (parsed) {
-          // Try exact match on collection + path
-          doc = db.prepare(`
-            SELECT
-              'qmd://' || d.collection || '/' || d.path as virtual_path,
-              LENGTH(content.doc) as body_length,
-              d.collection,
-              d.path
-            FROM documents d
-            JOIN content ON content.hash = d.hash
-            WHERE d.collection = ? AND d.path = ? AND d.active = 1
-          `).get(parsed.collectionName, parsed.path) as typeof doc;
-        }
-      } else {
-        // Try exact match on path
-        doc = db.prepare(`
-          SELECT
-            'qmd://' || d.collection || '/' || d.path as virtual_path,
-            LENGTH(content.doc) as body_length,
-            d.collection,
-            d.path
-          FROM documents d
-          JOIN content ON content.hash = d.hash
-          WHERE d.path = ? AND d.active = 1
-          LIMIT 1
-        `).get(name) as { virtual_path: string; body_length: number; collection: string; path: string } | null;
-
-        // Try suffix match
-        if (!doc) {
-          doc = db.prepare(`
-            SELECT
-              'qmd://' || d.collection || '/' || d.path as virtual_path,
-              LENGTH(content.doc) as body_length,
-              d.collection,
-              d.path
-            FROM documents d
-            JOIN content ON content.hash = d.hash
-            WHERE d.path LIKE ? AND d.active = 1
-            LIMIT 1
-          `).get(`%${name}`) as { virtual_path: string; body_length: number; collection: string; path: string } | null;
-        }
-      }
+      // Resolve qmd:// exact, path exact, then path suffix (store.findDocumentRef).
+      const doc = findDocumentRef(db, name);
 
       if (doc) {
         files.push({
@@ -1174,12 +1144,8 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     const context = collection && path ? getContextForPath(db, collection, path) : null;
 
     // Resolve docid (first 6 chars of content hash) so every entry can be cited.
-    const docidRow = collection && path ? db.prepare(`
-      SELECT d.hash as hash
-      FROM documents d
-      WHERE d.collection = ? AND d.path = ? AND d.active = 1
-    `).get(collection, path) as { hash: string } | null : null;
-    const docid = docidRow?.hash ? docidRow.hash.slice(0, 6) : undefined;
+    const docHash = collection && path ? getDocumentHash(db, collection, path) : null;
+    const docid = docHash ? docHash.slice(0, 6) : undefined;
 
     // --full-path: resolve the on-disk path when it exists (else fall back).
     // Display as ./-prefixed relative path when under $PWD; absolute realpath
@@ -1209,12 +1175,7 @@ function multiGet(pattern: string, maxLines?: number, maxBytes: number = DEFAULT
     // Fetch document content using collection and path
     if (!collection || !path) continue;
 
-    const doc = db.prepare(`
-      SELECT content.doc as body, d.title
-      FROM documents d
-      JOIN content ON content.hash = d.hash
-      WHERE d.collection = ? AND d.path = ? AND d.active = 1
-    `).get(collection, path) as { body: string; title: string } | null;
+    const doc = getDocumentContent(db, collection, path);
 
     if (!doc) continue;
 
@@ -1358,17 +1319,12 @@ function listFiles(pathArg?: string): void {
       return;
     }
 
-    // Get file counts from database for each collection
+    // Get file counts from database for each collection (YAML iteration kept so
+    // zero-document collections still show "0 files").
     const collections = yamlCollections.map(coll => {
-      const stats = db.prepare(`
-        SELECT COUNT(*) as file_count
-        FROM documents d
-        WHERE d.collection = ? AND d.active = 1
-      `).get(coll.name) as { file_count: number } | null;
-
       return {
         name: coll.name,
-        file_count: stats?.file_count || 0
+        file_count: countDocumentsInCollection(db, coll.name)
       };
     });
 
@@ -1452,32 +1408,7 @@ function listFiles(pathArg?: string): void {
   }
 
   // List files in the collection with size and modification time
-  let query: string;
-  let params: SQLiteValue[];
-
-  if (pathPrefix) {
-    // List files under a specific path
-    query = `
-      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
-      FROM documents d
-      JOIN content ct ON d.hash = ct.hash
-      WHERE d.collection = ? AND d.path LIKE ? AND d.active = 1
-      ORDER BY d.path
-    `;
-    params = [coll.name, `${pathPrefix}%`];
-  } else {
-    // List all files in the collection
-    query = `
-      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
-      FROM documents d
-      JOIN content ct ON d.hash = ct.hash
-      WHERE d.collection = ? AND d.active = 1
-      ORDER BY d.path
-    `;
-    params = [coll.name];
-  }
-
-  const files = db.prepare(query).all(...params) as { path: string; title: string; modified_at: string; size: number }[];
+  const files = listDocumentsWithMeta(db, coll.name, pathPrefix ?? undefined);
 
   if (files.length === 0) {
     if (pathPrefix) {
@@ -3624,26 +3555,16 @@ function checkModelCache(activeModels: { embed: string; generate: string; rerank
 }
 
 async function checkEmbeddingVectorSamples(db: Database, model: string, fingerprint: string, sampleSize: number = 3): Promise<DoctorVectorSampleResult> {
-  const activeDocs = (db.prepare(`SELECT COUNT(*) AS count FROM documents WHERE active = 1`).get() as { count: number }).count;
+  const activeDocs = countActiveDocuments(db);
   if (activeDocs === 0) {
     return { ok: true, details: "no active documents indexed" };
   }
 
-  const vecTableExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
-  if (!vecTableExists) {
+  if (!hasVectorTable(db)) {
     return { ok: false, details: "no vector table to test; please run qmd embed again" };
   }
 
-  const samples = db.prepare(`
-    SELECT cv.hash, cv.seq, c.doc AS body, MIN(d.path) AS path
-    FROM content_vectors cv
-    JOIN documents d ON d.hash = cv.hash AND d.active = 1
-    JOIN content c ON c.hash = cv.hash
-    WHERE cv.model = ? AND cv.embed_fingerprint = ?
-    GROUP BY cv.hash, cv.seq, c.doc
-    ORDER BY random()
-    LIMIT ?
-  `).all(model, fingerprint, sampleSize) as { hash: string; seq: number; body: string; path: string }[];
+  const samples = sampleEmbeddedChunks(db, model, fingerprint, sampleSize);
 
   if (samples.length === 0) {
     return { ok: false, details: "no current embedded chunks to test; please run qmd embed again" };
@@ -3669,13 +3590,13 @@ async function checkEmbeddingVectorSamples(db: Database, model: string, fingerpr
         continue;
       }
 
-      const stored = db.prepare(`SELECT embedding FROM vectors_vec WHERE hash_seq = ?`).get(hashSeq) as { embedding: Uint8Array } | undefined;
-      if (!stored) {
+      const storedEmbedding = getStoredEmbedding(db, hashSeq);
+      if (!storedEmbedding) {
         mismatches.push(`${shortHashSeq(hashSeq)}: stored vector missing`);
         continue;
       }
 
-      const distance = cosineDistance(result.embedding, decodeStoredEmbedding(stored.embedding));
+      const distance = cosineDistance(result.embedding, decodeStoredEmbedding(storedEmbedding));
       if (distance > threshold) {
         mismatches.push(`${shortHashSeq(hashSeq)}: stored vector distance ${distance.toFixed(6)}`);
       }
@@ -3841,8 +3762,7 @@ async function showDoctor(): Promise<void> {
   console.log(`Runtime: ${isBun ? "bun:sqlite" : "better-sqlite3"}`);
 
   try {
-    const row = db.prepare(`SELECT sqlite_version() AS version`).get() as { version: string };
-    doctorCheck("SQLite runtime", true, row.version);
+    doctorCheck("SQLite runtime", true, getSqliteVersion(db));
   } catch (error) {
     doctorCheck("SQLite runtime", false, error instanceof Error ? error.message : String(error));
   }
@@ -3851,8 +3771,7 @@ async function showDoctor(): Promise<void> {
   doctorCheck("better-sqlite3 package", true, String(betterSqliteVersion));
 
   try {
-    const row = db.prepare(`SELECT vec_version() AS version`).get() as { version: string };
-    doctorCheck("sqlite-vec", true, row.version);
+    doctorCheck("sqlite-vec", true, getVecVersion(db));
   } catch (error) {
     doctorCheck("sqlite-vec", false, error instanceof Error ? error.message : String(error));
   }
@@ -3885,12 +3804,7 @@ async function showDoctor(): Promise<void> {
   }
 
   try {
-    const rows = db.prepare(`
-      SELECT model, embed_fingerprint AS fingerprint, COUNT(DISTINCT hash) AS docs, COUNT(*) AS chunks
-      FROM content_vectors
-      GROUP BY model, embed_fingerprint
-      ORDER BY chunks DESC, model, embed_fingerprint
-    `).all() as { model: string; fingerprint: string; docs: number; chunks: number }[];
+    const rows = getEmbeddingFingerprintGroups(db);
     const uniqueFingerprints = new Set(rows.map(row => row.fingerprint));
     const offCurrent = rows.filter(row => row.model === embedModel && row.fingerprint !== fingerprint);
     const ok = rows.length === 0 || (uniqueFingerprints.size === 1 && rows[0]?.fingerprint === fingerprint && offCurrent.length === 0);
