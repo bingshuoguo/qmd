@@ -27,6 +27,8 @@ import {
   findDocumentRef,
   getDocumentHash,
   getDocumentContent,
+  countDocumentsInCollection,
+  listDocumentsWithMeta,
   type Store,
 } from "../src/store.js";
 
@@ -175,5 +177,39 @@ describe("getDocumentContent", () => {
 
   test("returns null for a missing doc", () => {
     expect(getDocumentContent(db, "c1", "missing.md")).toBeNull();
+  });
+});
+
+describe("countDocumentsInCollection", () => {
+  test("counts active docs per collection; zero-doc collection returns 0", async () => {
+    await seedDoc("c1", "a.md");
+    await seedDoc("c1", "b.md");
+    await seedDoc("c2", "x.md");
+    await seedDoc("c1", "gone.md", { active: 0 });
+    expect(countDocumentsInCollection(db, "c1")).toBe(2);
+    expect(countDocumentsInCollection(db, "c2")).toBe(1);
+    expect(countDocumentsInCollection(db, "empty")).toBe(0);
+  });
+});
+
+describe("listDocumentsWithMeta", () => {
+  test("lists active docs in a collection ordered by path, with title/size/mtime", async () => {
+    await seedDoc("c1", "b.md", { title: "B", body: "bbb" });
+    await seedDoc("c1", "a.md", { title: "A", body: "a" });
+    await seedDoc("c1", "gone.md", { active: 0 });
+    await seedDoc("c2", "other.md");
+    const rows = listDocumentsWithMeta(db, "c1");
+    expect(rows.map(r => r.path)).toEqual(["a.md", "b.md"]);
+    expect(rows[0]?.title).toBe("A");
+    expect(rows[0]?.size).toBe(1);
+    expect(typeof rows[0]?.modified_at).toBe("string");
+  });
+
+  test("filters by path prefix", async () => {
+    await seedDoc("c1", "sub/x.md");
+    await seedDoc("c1", "sub/y.md");
+    await seedDoc("c1", "top.md");
+    const rows = listDocumentsWithMeta(db, "c1", "sub/");
+    expect(rows.map(r => r.path)).toEqual(["sub/x.md", "sub/y.md"]);
   });
 });
