@@ -2977,6 +2977,29 @@ export function matchFilesByGlob(db: Database, pattern: string): { filepath: str
 }
 
 // =============================================================================
+// Narrow query helpers (sunk verbatim from src/cli/qmd.ts)
+// =============================================================================
+// One function per SQL statement (spec docs/specs/qmd-cli-sql-ownership.md D4).
+// Internal store helpers — NOT re-exported from src/index.ts, NOT on the store
+// object's public interface (D6). Do not consolidate; each mirrors exactly the
+// SQL the CLI used to run inline so the relocation is behavior-preserving.
+
+/** SELECT COUNT(*) FROM documents WHERE active = 1 */
+export function countActiveDocuments(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM documents WHERE active = 1`).get() as { count: number }).count;
+}
+
+/** SELECT COUNT(*) FROM content_vectors */
+export function countContentVectors(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM content_vectors`).get() as { count: number }).count;
+}
+
+/** SELECT MAX(modified_at) FROM documents WHERE active = 1 */
+export function getLatestDocumentModifiedAt(db: Database): string | null {
+  return (db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null }).latest;
+}
+
+// =============================================================================
 // Context
 // =============================================================================
 

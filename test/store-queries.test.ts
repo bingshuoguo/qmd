@@ -18,8 +18,12 @@ import {
   syncConfigToDb,
   insertContent,
   insertDocument,
+  insertEmbedding,
   hashContent,
   invalidateConfigCache,
+  countActiveDocuments,
+  countContentVectors,
+  getLatestDocumentModifiedAt,
   type Store,
 } from "../src/store.js";
 
@@ -78,5 +82,41 @@ describe("invalidateConfigCache", () => {
     // With the hash cleared, the next sync rewrites it (i.e. it did NOT early-return).
     syncConfigToDb(db, config);
     expect(db.prepare(`SELECT value FROM store_config WHERE key = 'config_hash'`).get()).toBeTruthy();
+  });
+});
+
+describe("countActiveDocuments", () => {
+  test("counts only active documents", async () => {
+    expect(countActiveDocuments(db)).toBe(0);
+    await seedDoc("c1", "a.md");
+    await seedDoc("c1", "b.md");
+    await seedDoc("c1", "gone.md", { active: 0 });
+    expect(countActiveDocuments(db)).toBe(2);
+  });
+});
+
+describe("countContentVectors", () => {
+  test("counts content_vectors rows", async () => {
+    expect(countContentVectors(db)).toBe(0);
+    const hash = await seedDoc("c1", "a.md");
+    store.ensureVecTable(3);
+    insertEmbedding(db, hash, 0, 0, new Float32Array([1, 2, 3]), "m", new Date().toISOString());
+    expect(countContentVectors(db)).toBe(1);
+  });
+});
+
+describe("getLatestDocumentModifiedAt", () => {
+  test("null with no active docs; otherwise MAX(modified_at) over active only", () => {
+    expect(getLatestDocumentModifiedAt(db)).toBeNull();
+    const now = new Date().toISOString();
+    insertContent(db, "h1", "b", now);
+    insertDocument(db, "c1", "old.md", "t", "h1", "2020-01-01T00:00:00.000Z", "2020-01-01T00:00:00.000Z");
+    insertContent(db, "h2", "b", now);
+    insertDocument(db, "c1", "new.md", "t", "h2", "2021-01-01T00:00:00.000Z", "2021-06-01T00:00:00.000Z");
+    expect(getLatestDocumentModifiedAt(db)).toBe("2021-06-01T00:00:00.000Z");
+
+    // Inactive documents are excluded from the MAX.
+    db.prepare(`UPDATE documents SET active = 0 WHERE path = 'new.md'`).run();
+    expect(getLatestDocumentModifiedAt(db)).toBe("2020-01-01T00:00:00.000Z");
   });
 });

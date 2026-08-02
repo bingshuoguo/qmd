@@ -78,6 +78,9 @@ import {
   maybeAdoptLegacyEmbeddingFingerprint,
   syncConfigToDb,
   invalidateConfigCache,
+  countActiveDocuments,
+  countContentVectors,
+  getLatestDocumentModifiedAt,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -482,13 +485,13 @@ async function showStatus(): Promise<void> {
   const collections = listCollections(db);
 
   // Overall stats
-  const totalDocs = db.prepare(`SELECT COUNT(*) as count FROM documents WHERE active = 1`).get() as { count: number };
-  const vectorCount = db.prepare(`SELECT COUNT(*) as count FROM content_vectors`).get() as { count: number };
+  const totalDocs = countActiveDocuments(db);
+  const vectorCount = countContentVectors(db);
   const statusEmbedModel = resolveEmbedModelForCli();
   const needsEmbedding = getHashesNeedingEmbedding(db, undefined, statusEmbedModel);
 
   // Most recent update across all collections
-  const mostRecent = db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null };
+  const mostRecent = getLatestDocumentModifiedAt(db);
 
   console.log(`${c.bold}QMD Status${c.reset}\n`);
   console.log(`Index: ${dbPath}`);
@@ -512,13 +515,13 @@ async function showStatus(): Promise<void> {
   console.log("");
 
   console.log(`${c.bold}Documents${c.reset}`);
-  console.log(`  Total:    ${totalDocs.count} files indexed`);
-  console.log(`  Vectors:  ${vectorCount.count} embedded`);
+  console.log(`  Total:    ${totalDocs} files indexed`);
+  console.log(`  Vectors:  ${vectorCount} embedded`);
   if (needsEmbedding > 0) {
     console.log(`  ${c.yellow}Pending:  ${needsEmbedding} need embedding${c.reset} (run 'qmd embed')`);
   }
-  if (mostRecent.latest) {
-    const lastUpdate = new Date(mostRecent.latest);
+  if (mostRecent) {
+    const lastUpdate = new Date(mostRecent);
     console.log(`  Updated:  ${formatTimeAgo(lastUpdate)}`);
   }
 
@@ -3625,7 +3628,7 @@ function checkModelCache(activeModels: { embed: string; generate: string; rerank
 }
 
 async function checkEmbeddingVectorSamples(db: Database, model: string, fingerprint: string, sampleSize: number = 3): Promise<DoctorVectorSampleResult> {
-  const activeDocs = (db.prepare(`SELECT COUNT(*) AS count FROM documents WHERE active = 1`).get() as { count: number }).count;
+  const activeDocs = countActiveDocuments(db);
   if (activeDocs === 0) {
     return { ok: true, details: "no active documents indexed" };
   }
