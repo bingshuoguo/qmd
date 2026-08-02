@@ -1234,6 +1234,15 @@ export function syncConfigToDb(db: Database, config: CollectionConfig): void {
   db.prepare(`INSERT INTO store_config (key, value) VALUES ('config_hash', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(hash);
 }
 
+/**
+ * Clear the cached config hash so the next syncConfigToDb() re-syncs even when
+ * the config content is unchanged. Internal store helper (not part of the
+ * public SDK surface); used by the CLI after collection/context mutations.
+ */
+export function invalidateConfigCache(db: Database): void {
+  db.prepare(`DELETE FROM store_config WHERE key = 'config_hash'`).run();
+}
+
 
 export function isSqliteVecAvailable(): boolean {
   return _sqliteVecAvailable === true;

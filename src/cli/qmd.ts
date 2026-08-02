@@ -77,6 +77,7 @@ import {
   generateEmbeddings,
   maybeAdoptLegacyEmbeddingFingerprint,
   syncConfigToDb,
+  invalidateConfigCache,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -155,7 +156,7 @@ function resyncConfig(): void {
   try {
     const config = loadConfig();
     // Clear config hash to force re-sync
-    s.db.prepare(`DELETE FROM store_config WHERE key = 'config_hash'`).run();
+    invalidateConfigCache(s.db);
     syncConfigToDb(s.db, config);
   } catch {
     // Config may not exist — that's fine
