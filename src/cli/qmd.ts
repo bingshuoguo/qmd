@@ -2765,6 +2765,11 @@ function parseCLI() {
       "no-rerank": { type: "boolean", default: false },
       "no-gpu": { type: "boolean", default: false },
       intent: { type: "string" },
+      // Benchmark v2 options
+      run: { type: "string" },
+      model: { type: "string" },
+      only: { type: "string" },
+      "check-index": { type: "boolean" },
       // Chunking options
       "chunk-strategy": { type: "string" },  // "regex" (default) or "auto" (AST for code files)
       // MCP HTTP transport options
@@ -3274,7 +3279,7 @@ function showHelp(): void {
   console.log("  qmd skills list/get/path      - List and retrieve bundled runtime skills");
   console.log("  qmd skill show/install        - Show or install the QMD skill");
   console.log("  qmd mcp                       - Start the MCP server (stdio transport for AI agents)");
-  console.log("  qmd bench <fixture.json>      - Run search quality benchmarks against a fixture file");
+  console.log("  qmd bench <fixture-or-dir>    - Run legacy or qrels search quality benchmarks");
   console.log("");
   console.log("Collections & context:");
   console.log("  qmd collection add/list/remove/rename/show   - Manage indexed folders");
@@ -4374,19 +4379,59 @@ if (isMain) {
       const fixturePath = cli.args[0];
       if (!fixturePath) {
         console.error("Usage: qmd bench <fixture.json> [--json] [-c collection]");
+        console.error("       qmd bench <benchmark-dir> --run raw|current|candidate [--model ID] [--only lex|vec|hyde]");
+        console.error("       qmd bench <benchmark-dir> --check-index");
         console.error("");
-        console.error("Run search quality benchmarks against a fixture file.");
+        console.error("Run legacy fixture or canonical qrels benchmarks.");
         console.error("See src/bench/fixtures/example.json for the fixture format.");
         process.exit(1);
       }
-      const { runBenchmark } = await import("../bench/bench.js");
+      const runValue = cli.values.run;
+      if (
+        runValue !== undefined
+        && runValue !== "raw"
+        && runValue !== "current"
+        && runValue !== "candidate"
+      ) {
+        console.error("--run must be raw, current, or candidate");
+        process.exit(1);
+      }
+      const onlyValue = cli.values.only;
+      if (
+        onlyValue !== undefined
+        && onlyValue !== "lex"
+        && onlyValue !== "vec"
+        && onlyValue !== "hyde"
+      ) {
+        console.error("--only must be lex, vec, or hyde");
+        process.exit(1);
+      }
+      const modelValue = typeof cli.values.model === "string"
+        ? cli.values.model
+        : undefined;
+      const { runBenchmarkCommand, writeBenchmarkIndexManifest } = await import("../bench/bench.js");
       const benchCollection = cli.opts.collection;
-      await runBenchmark(fixturePath, {
-        json: !!cli.values.json,
-        collection: Array.isArray(benchCollection) ? benchCollection[0] : benchCollection,
+      const common = {
         dbPath: getDbPath(),
         configPath: configExists() ? getConfigPath() : undefined,
-      });
+      };
+      if (cli.values["check-index"]) {
+        if (runValue || modelValue || onlyValue) {
+          console.error("--check-index cannot be combined with --run, --model, or --only");
+          process.exit(1);
+        }
+        const manifest = await writeBenchmarkIndexManifest(fixturePath, common);
+        console.log(JSON.stringify(manifest, null, 2));
+      } else {
+        await runBenchmarkCommand(fixturePath, {
+          json: !!cli.values.json,
+          collection: Array.isArray(benchCollection) ? benchCollection[0] : benchCollection,
+          ...common,
+          run: runValue,
+          model: modelValue,
+          only: onlyValue,
+        });
+      }
       break;
     }
 

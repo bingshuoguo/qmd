@@ -3,7 +3,13 @@
  */
 
 import { describe, test, expect } from "vitest";
-import { normalizePath, pathsMatch, scoreResults } from "../src/bench/score.js";
+import {
+  averageCanonicalMetrics,
+  normalizePath,
+  pathsMatch,
+  scoreCanonicalRanking,
+  scoreResults,
+} from "../src/bench/score.js";
 
 describe("normalizePath", () => {
   test("lowercases path", () => {
@@ -124,5 +130,81 @@ describe("scoreResults", () => {
     const result = scoreResults(["a.md"], [], 1);
     expect(result.precision_at_k).toBe(0);
     expect(result.recall).toBe(0);
+  });
+});
+
+describe("scoreCanonicalRanking", () => {
+  test("single relevant document at rank 1", () => {
+    const result = scoreCanonicalRanking(["relevant", "other"], new Set(["relevant"]), [1, 3, 10]);
+    expect(result).toEqual({
+      recall_at_1: 1,
+      recall_at_3: 1,
+      recall_at_10: 1,
+      mrr_at_10: 1,
+      ndcg_at_10: 1,
+    });
+  });
+
+  test("single relevant document at rank 3", () => {
+    const result = scoreCanonicalRanking(["a", "b", "relevant"], new Set(["relevant"]), [1, 3]);
+    expect(result.recall_at_1).toBe(0);
+    expect(result.recall_at_3).toBe(1);
+    expect(result.mrr_at_10).toBeCloseTo(1 / 3);
+    // One binary relevant document: DCG = 1/log2(4), IDCG = 1.
+    expect(result.ndcg_at_10).toBeCloseTo(0.5);
+  });
+
+  test("single relevant document outside the metric cutoffs", () => {
+    const ranking = Array.from({ length: 11 }, (_, index) => `doc-${index + 1}`);
+    const result = scoreCanonicalRanking(ranking, new Set(["doc-11"]), [1, 3, 10]);
+    expect(result.recall_at_1).toBe(0);
+    expect(result.recall_at_3).toBe(0);
+    expect(result.recall_at_10).toBe(0);
+    expect(result.mrr_at_10).toBe(0);
+    expect(result.ndcg_at_10).toBe(0);
+  });
+
+  test("multiple relevant documents are partially recalled", () => {
+    const result = scoreCanonicalRanking(
+      ["relevant-a", "other", "other-2", "relevant-b"],
+      new Set(["relevant-a", "relevant-b", "missing"]),
+      [1, 3, 5],
+    );
+    expect(result.recall_at_1).toBeCloseTo(1 / 3);
+    expect(result.recall_at_3).toBeCloseTo(1 / 3);
+    expect(result.recall_at_5).toBeCloseTo(2 / 3);
+    expect(result.mrr_at_10).toBe(1);
+  });
+
+  test("binary nDCG distinguishes ideal and non-ideal ordering", () => {
+    const relevant = new Set(["a", "b"]);
+    const ideal = scoreCanonicalRanking(["a", "b", "x"], relevant, [10]);
+    const nonIdeal = scoreCanonicalRanking(["x", "a", "b"], relevant, [10]);
+    expect(ideal.ndcg_at_10).toBe(1);
+    const expectedNonIdeal = (1 / Math.log2(3) + 1 / Math.log2(4))
+      / (1 + 1 / Math.log2(3));
+    expect(nonIdeal.ndcg_at_10).toBeCloseTo(expectedNonIdeal);
+  });
+
+  test("cutoff may exceed the returned ranking length", () => {
+    const result = scoreCanonicalRanking(["a"], new Set(["a", "b"]), [30]);
+    expect(result.recall_at_30).toBe(0.5);
+  });
+
+  test("rejects an empty relevant set and duplicate ranked documents", () => {
+    expect(() => scoreCanonicalRanking(["a"], new Set(), [10]))
+      .toThrow("no relevant documents");
+    expect(() => scoreCanonicalRanking(["a", "a"], new Set(["a"]), [10]))
+      .toThrow('duplicate doc_id "a"');
+  });
+
+  test("macro average gives every query equal weight", () => {
+    const first = scoreCanonicalRanking(["a"], new Set(["a"]), [1, 10]);
+    const second = scoreCanonicalRanking(["x"], new Set(["b", "c"]), [1, 10]);
+    const average = averageCanonicalMetrics([first, second], [1, 10]);
+    expect(average.recall_at_1).toBe(0.5);
+    expect(average.recall_at_10).toBe(0.5);
+    expect(average.mrr_at_10).toBe(0.5);
+    expect(average.ndcg_at_10).toBe(0.5);
   });
 });
