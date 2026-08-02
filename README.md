@@ -1046,6 +1046,42 @@ grouping — it does not change search behavior.
 > completion and reports all zeros with no warning. Verify setup with
 > `qmd ls <collection>` first.
 
+#### Canonical SciFact benchmark (v2)
+
+The fixture format above is v1 and its precision/recall/MRR values retain their
+legacy QMD semantics. The frozen `qmd-expansion-scifact-v1` directory uses binary
+qrels and standard macro-averaged Recall@1/3/5/10/20/30, MRR@10, and nDCG@10.
+Its runner never generates query expansions online.
+
+Collection creation and embedding are explicit operator steps. Run these
+manually from a checkout; the benchmark command does not perform them:
+
+```sh
+qmd collection add "$(pwd)/finetune/benchmarks/qmd-expansion-scifact-v1/corpus" \
+  --name qmd-expansion-scifact-v1
+qmd embed -c qmd-expansion-scifact-v1
+
+# Freeze and verify the current collection-scoped index state.
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --check-index
+
+# Frozen original-query baseline.
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --run raw
+
+# These read expansions/current.jsonl and expansions/candidate.jsonl.
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run current --model <current-model-id>
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run candidate --model <candidate-model-id>
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run candidate --model <candidate-model-id> --only lex
+```
+
+Expansion JSONL must be generated separately and provide exactly one validated
+record per benchmark qid. Runs write `runs/<run-id>.json` plus per-query JSONL
+under `runs/results/`. A retrieval error marks the run failed and suppresses the
+official summary; model format/generation failures instead use empty expansions
+and are reported through separate format and generation error rates.
+
 ## Data Storage
 
 Index stored in: `~/.cache/qmd/index.sqlite`

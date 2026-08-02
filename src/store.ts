@@ -4715,32 +4715,45 @@ export function getHybridRrfWeights(rankedListMeta: RankedListMeta[]): number[] 
   return rankedListMeta.map(meta => meta.queryType === "original" ? 2.0 : 1.0);
 }
 
+export interface ExecuteHybridRetrievalOptions {
+  originalQuery: string;
+  originalFts: SearchResult[];
+  expansions: ExpandedQuery[];
+  collection?: string;
+  resultLimit: number;
+  perListLimit: number;
+  candidateLimit: number;
+  rerank: boolean;
+  minScore?: number;
+  explain?: boolean;
+  intent?: string;
+  chunkStrategy?: ChunkStrategy;
+  hooks?: SearchHooks;
+}
+
 /**
- * Hybrid search: BM25 + vector + query expansion + RRF + chunked reranking.
+ * Shared hybrid retrieval executor.
  *
- * Pipeline:
- * 1. BM25 probe → skip expansion if strong signal
- * 2. expandQuery() → typed query variants (lex/vec/hyde)
- * 3. Type-routed search: original→vector, lex→FTS, vec/hyde→vector
- * 4. RRF fusion → slice to candidateLimit
- * 5. chunkDocument() + keyword-best-chunk selection
- * 6. rerank on chunks (NOT full bodies — O(tokens) trap)
- * 7. Position-aware score blending (RRF rank × reranker score)
- * 8. Dedup by file, filter by minScore, slice to limit
+ * The caller owns the original BM25 probe and expansion policy. Keeping those
+ * outside this function lets production retain its strong-signal shortcut
+ * while the benchmark supplies frozen expansions without invoking a model.
  */
-export async function hybridQuery(
+export async function executeHybridRetrieval(
   store: Store,
-  query: string,
-  options?: HybridQueryOptions
+  options: ExecuteHybridRetrievalOptions,
 ): Promise<HybridQueryResult[]> {
-  const limit = options?.limit ?? 10;
-  const minScore = options?.minScore ?? 0;
-  const candidateLimit = options?.candidateLimit ?? RERANK_CANDIDATE_LIMIT;
-  const collection = options?.collection;
-  const explain = options?.explain ?? false;
-  const intent = options?.intent;
-  const skipRerank = options?.skipRerank ?? false;
-  const hooks = options?.hooks;
+  const query = options.originalQuery;
+  const initialFts = options.originalFts;
+  const expanded = options.expansions;
+  const limit = options.resultLimit;
+  const perListLimit = options.perListLimit;
+  const minScore = options.minScore ?? 0;
+  const candidateLimit = options.candidateLimit;
+  const collection = options.collection;
+  const explain = options.explain ?? false;
+  const intent = options.intent;
+  const skipRerank = !options.rerank;
+  const hooks = options.hooks;
 
   const rankedLists: RankedResult[][] = [];
   const rankedListMeta: RankedListMeta[] = [];
@@ -4748,29 +4761,6 @@ export async function hybridQuery(
   const hasVectors = !!store.db.prepare(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_vec'`
   ).get();
-
-  // Step 1: BM25 probe — strong signal skips expensive LLM expansion
-  // When intent is provided, disable strong-signal bypass — the obvious BM25
-  // match may not be what the caller wants (e.g. "performance" with intent
-  // "web page load times" should NOT shortcut to a sports-performance doc).
-  // Pass collection directly into FTS query (filter at SQL level, not post-hoc)
-  const initialFts = store.searchFTS(query, 20, collection);
-  const topScore = initialFts[0]?.score ?? 0;
-  const secondScore = initialFts[1]?.score ?? 0;
-  const hasStrongSignal = !intent && initialFts.length > 0
-    && topScore >= STRONG_SIGNAL_MIN_SCORE
-    && (topScore - secondScore) >= STRONG_SIGNAL_MIN_GAP;
-
-  if (hasStrongSignal) hooks?.onStrongSignal?.(topScore);
-
-  // Step 2: Expand query (or skip if strong signal)
-  hooks?.onExpandStart?.();
-  const expandStart = Date.now();
-  const expanded = hasStrongSignal
-    ? []
-    : await store.expandQuery(query, undefined, intent);
-
-  hooks?.onExpand?.(query, expanded, Date.now() - expandStart);
 
   // Seed with initial FTS results (avoid re-running original query FTS)
   if (initialFts.length > 0) {
@@ -4791,7 +4781,7 @@ export async function hybridQuery(
   // 3a: Run FTS for all lex expansions right away (no LLM needed)
   for (const q of expanded) {
     if (q.type === 'lex') {
-      const ftsResults = store.searchFTS(q.query, 20, collection);
+      const ftsResults = store.searchFTS(q.query, perListLimit, collection);
       if (ftsResults.length > 0) {
         for (const r of ftsResults) docidMap.set(r.filepath, r.docid);
         rankedLists.push(ftsResults.map(r => ({
@@ -4829,7 +4819,7 @@ export async function hybridQuery(
       if (!embedding) continue;
 
       const vecResults = await store.searchVec(
-        vecQueries[i]!.text, embedModel, 20, collection,
+        vecQueries[i]!.text, embedModel, perListLimit, collection,
         undefined, embedding
       );
       if (vecResults.length > 0) {
@@ -4862,7 +4852,7 @@ export async function hybridQuery(
   const intentTerms = intent ? extractIntentTerms(intent) : [];
   const docChunkMap = new Map<string, { chunks: { text: string; pos: number }[]; bestIdx: number }>();
 
-  const chunkStrategy = options?.chunkStrategy;
+  const chunkStrategy = options.chunkStrategy;
   for (const cand of candidates) {
     const chunks = await chunkDocumentAsync(cand.body, undefined, undefined, undefined, cand.file, chunkStrategy);
     if (chunks.length === 0) continue;
@@ -5009,6 +4999,82 @@ export async function hybridQuery(
     })
     .filter(r => r.score >= minScore)
     .slice(0, limit);
+}
+
+/**
+ * Production hybrid search. This preserves the existing strong-signal and
+ * online-expansion behavior, then delegates retrieval and ranking to the
+ * shared executor.
+ */
+export async function hybridQuery(
+  store: Store,
+  query: string,
+  options?: HybridQueryOptions
+): Promise<HybridQueryResult[]> {
+  const perListLimit = 20;
+  const collection = options?.collection;
+  const intent = options?.intent;
+  const hooks = options?.hooks;
+  const initialFts = store.searchFTS(query, perListLimit, collection);
+  const topScore = initialFts[0]?.score ?? 0;
+  const secondScore = initialFts[1]?.score ?? 0;
+  const hasStrongSignal = !intent && initialFts.length > 0
+    && topScore >= STRONG_SIGNAL_MIN_SCORE
+    && (topScore - secondScore) >= STRONG_SIGNAL_MIN_GAP;
+
+  if (hasStrongSignal) hooks?.onStrongSignal?.(topScore);
+  hooks?.onExpandStart?.();
+  const expandStart = Date.now();
+  const expansions = hasStrongSignal
+    ? []
+    : await store.expandQuery(query, undefined, intent);
+  hooks?.onExpand?.(query, expansions, Date.now() - expandStart);
+
+  return executeHybridRetrieval(store, {
+    originalQuery: query,
+    originalFts: initialFts,
+    expansions,
+    collection,
+    resultLimit: options?.limit ?? 10,
+    perListLimit,
+    candidateLimit: options?.candidateLimit ?? RERANK_CANDIDATE_LIMIT,
+    rerank: !(options?.skipRerank ?? false),
+    minScore: options?.minScore,
+    explain: options?.explain,
+    intent,
+    chunkStrategy: options?.chunkStrategy,
+    hooks,
+  });
+}
+
+export interface BenchmarkRetrievalOptions {
+  originalQuery: string;
+  expansions: ExpandedQuery[];
+  collection: string;
+  resultLimit: number;
+  perListLimit: number;
+  candidateLimit: number;
+  rerank: boolean;
+  hooks?: SearchHooks;
+}
+
+/**
+ * Internal benchmark seam for frozen, pre-generated expansions.
+ * It deliberately has no strong-signal shortcut or online expansion call.
+ */
+export async function retrieveForBenchmark(
+  store: Store,
+  options: BenchmarkRetrievalOptions,
+): Promise<HybridQueryResult[]> {
+  const originalFts = store.searchFTS(
+    options.originalQuery,
+    options.perListLimit,
+    options.collection,
+  );
+  return executeHybridRetrieval(store, {
+    ...options,
+    originalFts,
+  });
 }
 
 export interface VectorSearchOptions {
