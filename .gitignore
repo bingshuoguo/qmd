@@ -14,8 +14,10 @@ texts/
 !CHANGELOG.md
 !skills/**/*.md
 !finetune/*.md
-!docs/*.md
-!docs/specs/*.md
+# Documentation work products are local by default. Add an explicit `!path.md`
+# exception above only when a specific document is intentionally releasable.
+/docs/**/*.md
+/docs/*.md
 finetune/outputs/
 finetune/data/train/
 .claude/
