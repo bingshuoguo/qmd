@@ -56,6 +56,7 @@ import {
   loadRetrievalProfile,
   parseExpansionsJsonl,
 } from "./qrels.js";
+import { validateBenchmarkRunName } from "./run-name.js";
 import type {
   BenchmarkFixture,
   BenchmarkQuery,
@@ -931,6 +932,7 @@ export async function runBenchmarkV2(
   dependencies: BenchmarkV2Dependencies = {},
 ): Promise<BenchmarkRunV2> {
   const root = resolve(benchmarkDir);
+  validateBenchmarkRunName(options.run);
   const benchmarkManifestBytes = readFileSync(join(root, "benchmark.yaml"));
   const benchmark = loadBenchmarkV2(root);
   const profileBytes = readFileSync(join(root, "retrieval-profile.yaml"));

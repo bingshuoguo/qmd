@@ -1067,13 +1067,26 @@ qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --check-index
 # Frozen original-query baseline.
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --run raw
 
-# These read expansions/current.jsonl and expansions/candidate.jsonl.
+# Generate one frozen expansion artifact per model. Generation is sequential
+# and resumes from a validated .partial file after interruption.
+npm run bench:expand -- \
+  --benchmark finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run upstream-qmd \
+  --model hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
+
+npm run bench:expand -- \
+  --benchmark finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run qwen-1.7b-base \
+  --model <absolute-path-to-base-gguf>
+
+# Each named run reads expansions/<run-name>.jsonl.
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run current --model <current-model-id>
+  --run upstream-qmd \
+  --model hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run candidate --model <candidate-model-id>
+  --run qwen-1.7b-base --model <qwen-base-model-id>
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run candidate --model <candidate-model-id> --only lex
+  --run candidate-data-clean-v1 --model <candidate-model-id> --only lex
 ```
 
 Expansion JSONL must be generated separately and provide exactly one validated
