@@ -1,0 +1,15 @@
+benchmark_id: qmd-expansion-scifact-v1
+source:
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  archive_md5: 5f7d1de60b170fc8027bb7898e2efca1
+  split: test
+source_qrels_sha256: 0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c
+excluded_qids_sha256: 37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570
+leakage_report_sha256: b6bfd4a4f7a0f3109fdc3bc6b70ecd0190b494aa09471f8cf728e8127cbd69ab
+converted_data_sha256: 07acab860bed3dba45e22e299a934b8e4ce8c2ad1d9de5c08e43020810ac6c13
+qrels:
+  relevant_threshold: 1
+  unjudged: nonrelevant
+  graded: false
+cutoffs: [1, 3, 5, 10, 20, 30]
+metrics: [recall_at_cutoffs, mrr_at_10, ndcg_at_10]

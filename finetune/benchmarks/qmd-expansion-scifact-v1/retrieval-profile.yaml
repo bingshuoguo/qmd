@@ -1,0 +1,11 @@
+profile_id: qmd-scifact-controlled-v1
+collection_name: qmd-expansion-scifact-v1
+collection_root: corpus
+embedding_model: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+reranker_model: hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf
+result_limit: 30
+per_list_limit: 30
+candidate_limit: 40
+rerank: true
+auto_expand: false
+strong_signal_bypass: false
