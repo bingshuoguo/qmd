@@ -1,6 +1,6 @@
 # QMD Expansion SciFact Benchmark Spec
 
-状态：设计已确认，可实施
+状态：Steps 1–4 已实施，Step 5 readiness 进行中
 
 Benchmark ID：`qmd-expansion-scifact-v1`
 
@@ -10,8 +10,9 @@ Benchmark ID：`qmd-expansion-scifact-v1`
 
 ```text
 raw
-current
-candidate
+upstream-qmd
+qwen-1.7b-base
+candidate-<experiment>
 lex-only
 vec-only
 hyde-only
@@ -62,9 +63,9 @@ finetune/benchmarks/qmd-expansion-scifact-v1/
 ├── documents.jsonl
 ├── leakage-report.json
 ├── corpus/<source_doc_id>.md
-├── expansions/{current,candidate}.jsonl
+├── expansions/<run-name>.jsonl
 └── runs/
-    ├── {raw,current,candidate}.json
+    ├── <run-id>.json
     └── results/*.jsonl
 ```
 
@@ -283,7 +284,7 @@ retrieveForBenchmark({
 2. 所有 variant 使用相同的 original-query RRF 权重；
 3. 不在线生成 expansion，不执行 strong-signal shortcut；
 4. `raw` 使用空 expansions；
-5. current/candidate 只允许 expansions 不同；
+5. 所有命名模型 run 只允许 expansion artifact 不同；
 6. `lex` 路由到 BM25，`vec`/`hyde` 路由到 vector；
 7. corpus、index、embedding、fusion、reranker和候选数量完全一致；
 8. runner 必须显式指定 profile 中的唯一 collection，禁止检索全部 collection；
@@ -453,7 +454,7 @@ Benchmark readiness：
 3. collection 内容、embedding 完整性和 index fingerprint 校验通过；
 4. scorer 通过人工构造的手算测试；
 5. 重复运行产生一致 ranking 和指标；
-6. raw/current/candidate 使用同一受控检索入口和检索深度；
+6. raw 与全部命名模型 run 使用同一受控检索入口和检索深度；
 7. 错误明确可见，逐 query 结果可复核；
 8. leakage report 与 v1 兼容测试通过。
 
@@ -502,32 +503,34 @@ qmd bench <v1-fixture.json>
 v2 使用 benchmark 目录和命名 run：
 
 ```bash
-# 建立 collection/embeddings 后，只读检查实际索引并写出 index-manifest.json
-qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --snapshot-index
+# 建立 collection/embeddings 后，检查实际索引并写出 index-manifest.json
+qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --check-index
 
 # 原始 query，不加载 expansion 文件
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --run raw
 
-# 自动读取 expansions/current.jsonl
+# 自动读取 expansions/upstream-qmd.jsonl
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run current \
-  --expansion-model-id <current-model-id>
+  --run upstream-qmd \
+  --model hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
 
-# 自动读取 expansions/candidate.jsonl
+# 自动读取 expansions/qwen-1.7b-base.jsonl
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run candidate \
-  --expansion-model-id <candidate-model-id>
+  --run qwen-1.7b-base \
+  --model <qwen-base-model-id>
 
-# 使用同一 candidate expansion 文件做类型消融
+# 使用同一候选模型 expansion 文件做类型消融
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 \
-  --run candidate \
-  --expansion-model-id <candidate-model-id> \
+  --run candidate-data-clean-v1 \
+  --model <candidate-model-id> \
   --only lex
 ```
 
-`--snapshot-index` 只读取 profile 指定的 collection，校验 doc mapping 和 embedding 完整性，然后显式写出 `index-manifest.json`；不得创建 collection、生成 embedding 或修改 QMD SQLite。普通 run 只验证该 manifest，不自动更新它。
+`--check-index` 只读取 profile 指定的 collection，校验 doc mapping 和 embedding 完整性，然后显式写出 `index-manifest.json`；不得创建 collection、生成 embedding 或修改 QMD SQLite。普通 run 只验证该 manifest，不自动更新它。
 
-`--expansion-model-id` 只声明预生成 expansion artifact 的来源并写入 run；它不得选择、加载或调用模型。runner 只读取 `expansions/<run>.jsonl`，以文件 SHA256 固定实际输入。第一阶段不声称根据 model ID 反向证明 expansion 文件来源；若后续增加 expansion manifest，再由该参数与 manifest 做一致性校验。
+`--run` 接受 lowercase safe slug；`raw` 保留为无 expansion 的特殊基线，其他名称默认读取 `expansions/<run>.jsonl`。传统的 `current`、`candidate` 名称继续兼容。
+
+`--model` 只声明预生成 expansion artifact 的来源并写入 run；它不得选择、加载或调用模型。runner 以 expansion 文件 SHA256 固定实际输入。第一阶段不声称根据 model ID 反向证明 expansion 文件来源；训练或转换 manifest 负责保存精确模型 artifact provenance。
 
 `--only` 只接受 `lex`、`vec` 或 `hyde`，生成的 run ID 分别追加 `-lex-only`、`-vec-only`、`-hyde-only`。runner 自动写入 `runs/<run-id>.json` 和 `runs/results/<run-id>.jsonl`；`--json` 只控制终端输出格式，不改变 artifact。
 
@@ -565,6 +568,21 @@ finetune/benchmarks/prepare-scifact.ts
 
 相同源 archive 和相同代码必须逐字节生成相同的冻结数据。
 
+离线 expansion 由独立命令生成，不经过 benchmark runner：
+
+```bash
+npm run bench:expand -- \
+  --benchmark finetune/benchmarks/qmd-expansion-scifact-v1 \
+  --run <run-name> \
+  --model <hf-model-id-or-local-gguf>
+```
+
+生成器逐条保存模型原始输出，严格区分 `ok`、`format_error` 和
+`generation_error`，并在内容校验无可用 expansion 时记录 fallback。运行中每条
+query 都追加到 `.partial` 文件；再次执行同一命令会校验并跳过已完成的连续前缀，
+全部 300 条通过 `parseExpansionsJsonl()` 后再原子重命名为正式 JSONL。`--force`
+用于显式丢弃现有正式文件和 partial，从头生成。
+
 ## 11. 代码改造范围
 
 | 文件 | 变更 |
@@ -575,7 +593,9 @@ finetune/benchmarks/prepare-scifact.ts
 | `src/bench/index.ts` | 校验唯一 collection、doc mapping、embedding 完整性并生成 collection-scoped index fingerprint |
 | `src/bench/bench.ts` | 区分 v1 fixture 与 v2 benchmark 目录，校验 profile/index，执行命名 run并写出 artifacts |
 | `src/store.ts` | 抽取生产和 benchmark 共用的 hybrid retrieval core，显式接收 collection 和三层 retrieval limit |
-| `src/cli/qmd.ts` | 解析 v2 的 `--snapshot-index`、`--run`、`--expansion-model-id`、`--only`，保持旧命令兼容 |
+| `src/cli/qmd.ts` | 解析 v2 的 `--check-index`、命名 `--run`、`--model`、`--only`，保持旧命令兼容 |
+| `src/bench/expansions.ts` | 校验 run slug、解析原始模型输出、断点生成并原子冻结 expansion artifact |
+| `finetune/benchmarks/generate-expansions.ts` | 使用明确 GGUF 模型逐条生成命名 expansion artifact |
 | `finetune/benchmarks/prepare-scifact.ts` | 下载、校验、转换和验证 SciFact |
 | `test/bench-score.test.ts` | 保留 legacy 测试并增加标准指标手算用例 |
 | `test/bench-qrels.test.ts` | 新增 loader、mapping 和错误输入测试 |
@@ -629,12 +649,12 @@ finetune/benchmarks/prepare-scifact.ts
 - `raw` 仍执行 original BM25/vector；
 - 传入 expansions 后 original retrieval 不消失；
 - `lex`、`vec`、`hyde` 路由正确；
-- raw/current/candidate 使用相同 original-query 权重；
+- raw 与全部命名模型 run 使用相同 original-query 权重；
 - benchmark 只检索指定 collection，其他 collection 的高分文档不会混入；
 - collection 文档缺失、额外、过期或 embedding 不完整时在检索前失败；
 - document 或任一 vector bytes 改变时 index fingerprint 改变；
 - `result_limit = 30` 时实际保留 top 30，且每路和 candidate 深度使用 profile 值；
-- `--expansion-model-id` 不加载模型或触发在线生成；
+- benchmark `--model` 不加载模型或触发在线生成；
 - strong-signal shortcut 和在线 expansion 未触发；
 - rerank on/off 只改变指定阶段；
 - backend error 使 run 失败而不是产生零分；
@@ -681,12 +701,12 @@ bun test test/eval-bm25.test.ts
 - 显式传入 collection、result/per-list/candidate limit；
 - 验证 production default path 不变。
 
-退出条件：受控 raw/current/candidate 仅因 expansions 不同，且旧检索回归测试通过。
+退出条件：受控 raw/任意命名模型 run 仅因 expansions 不同，且旧检索回归测试通过。
 
 ### Step 4：v2 runner 与 CLI
 
 - 支持 benchmark 目录、命名 run 和类型消融；
-- 支持显式 snapshot index，普通 run 不自动改写 manifest；
+- 支持显式 check index，普通 run 不自动改写 manifest；
 - 在检索前验证 profile、collection/index manifest 和 embedding 完整性；
 - 写出逐 query results 和 run manifest；
 - 错误 run 不产生官方汇总。
@@ -697,7 +717,7 @@ bun test test/eval-bm25.test.ts
 
 - 使用冻结 SciFact 数据建立 collection/index；
 - 生成并冻结 index manifest；
-- 运行 raw/current/candidate；
+- 运行 raw、upstream QMD、Qwen base 和各 candidate；
 - 复核逐 query ranking、错误、expansion/format/generation/fallback rate；
 - 确认 readiness checklist 全部通过。
 

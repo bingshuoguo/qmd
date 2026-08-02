@@ -584,6 +584,36 @@ describe("v2 runner artifacts", () => {
     });
   });
 
+  test("supports an arbitrary named model run", async () => {
+    const root = writeV2Fixture();
+    writeFileSync(
+      join(root, "expansions", "qwen-1.7b-base.jsonl"),
+      readFileSync(join(root, "expansions", "candidate.jsonl")),
+    );
+    const dependencies = runnerDependencies(async (_store, options) => {
+      const doc = options.originalQuery === "first" ? "d1.md" : "d2.md";
+      return [benchmarkResult(`qmd://qmd-expansion-scifact-v1/${doc}`)];
+    });
+    const run = await runBenchmarkV2(root, {
+      run: "qwen-1.7b-base",
+      model: "hf:example/Qwen-1.7B-Base/model.gguf",
+      dbPath: join(root, "unused.sqlite"),
+    }, dependencies);
+
+    expect(run.variant).toBe("qwen-1.7b-base");
+    expect(run.run_id).toBe("qwen-1.7b-base-example-qwen-1.7b-base-model.gguf");
+    expect(run.expansion_model).toBe("hf:example/Qwen-1.7B-Base/model.gguf");
+  });
+
+  test("rejects path-like model run names", async () => {
+    const root = writeV2Fixture();
+    await expect(runBenchmarkV2(root, {
+      run: "../candidate",
+      model: "model-a",
+      dbPath: join(root, "unused.sqlite"),
+    })).rejects.toThrow("safe slug");
+  });
+
   test("uses a null fallback rate when no expansion succeeds", async () => {
     const root = writeV2Fixture();
     writeFileSync(join(root, "expansions", "candidate.jsonl"), [

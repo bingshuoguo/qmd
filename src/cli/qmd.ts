@@ -4379,22 +4379,24 @@ if (isMain) {
       const fixturePath = cli.args[0];
       if (!fixturePath) {
         console.error("Usage: qmd bench <fixture.json> [--json] [-c collection]");
-        console.error("       qmd bench <benchmark-dir> --run raw|current|candidate [--model ID] [--only lex|vec|hyde]");
+        console.error("       qmd bench <benchmark-dir> --run <name> [--model ID] [--only lex|vec|hyde]");
         console.error("       qmd bench <benchmark-dir> --check-index");
         console.error("");
         console.error("Run legacy fixture or canonical qrels benchmarks.");
         console.error("See src/bench/fixtures/example.json for the fixture format.");
         process.exit(1);
       }
-      const runValue = cli.values.run;
-      if (
-        runValue !== undefined
-        && runValue !== "raw"
-        && runValue !== "current"
-        && runValue !== "candidate"
-      ) {
-        console.error("--run must be raw, current, or candidate");
-        process.exit(1);
+      const runValue = typeof cli.values.run === "string"
+        ? cli.values.run
+        : undefined;
+      if (runValue !== undefined) {
+        const { validateBenchmarkRunName } = await import("../bench/run-name.js");
+        try {
+          validateBenchmarkRunName(runValue);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exit(1);
+        }
       }
       const onlyValue = cli.values.only;
       if (

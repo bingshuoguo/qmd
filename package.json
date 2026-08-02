@@ -35,6 +35,7 @@
     "test:unit": "CI=true node ./node_modules/vitest/vitest.mjs run --reporter=verbose --testTimeout 60000 test/ && CI=true bun test --timeout 60000 --preload ./src/test-preload.ts test/",
     "test:package": "node scripts/package-smoke.mjs",
     "qmd": "tsx src/cli/qmd.ts",
+    "bench:expand": "tsx finetune/benchmarks/generate-expansions.ts",
     "index": "tsx src/cli/qmd.ts index",
     "vector": "tsx src/cli/qmd.ts vector",
     "search": "tsx src/cli/qmd.ts search",

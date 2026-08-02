@@ -97,7 +97,8 @@ export type CanonicalMetric =
 
 export type ExpansionType = "lex" | "vec" | "hyde";
 export type ExpansionStatus = "ok" | "format_error" | "generation_error";
-export type BenchmarkVariant = "raw" | "current" | "candidate";
+/** Safe run slug. "raw", "current", and "candidate" remain conventional names. */
+export type BenchmarkVariant = string;
 export type RunStatus = "completed" | "failed";
 export type QueryExecutionStatus = "ok" | "error";
 
