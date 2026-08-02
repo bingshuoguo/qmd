@@ -1234,6 +1234,15 @@ export function syncConfigToDb(db: Database, config: CollectionConfig): void {
   db.prepare(`INSERT INTO store_config (key, value) VALUES ('config_hash', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(hash);
 }
 
+/**
+ * Clear the cached config hash so the next syncConfigToDb() re-syncs even when
+ * the config content is unchanged. Internal store helper (not part of the
+ * public SDK surface); used by the CLI after collection/context mutations.
+ */
+export function invalidateConfigCache(db: Database): void {
+  db.prepare(`DELETE FROM store_config WHERE key = 'config_hash'`).run();
+}
+
 
 export function isSqliteVecAvailable(): boolean {
   return _sqliteVecAvailable === true;
@@ -2965,6 +2974,211 @@ export function matchFilesByGlob(db: Database, pattern: string): { filepath: str
       displayPath: f.path,        // Relative path for display
       bodyLength: f.body_length
     }));
+}
+
+// =============================================================================
+// Narrow query helpers (sunk verbatim from src/cli/qmd.ts)
+// =============================================================================
+// One function per SQL statement (spec docs/specs/qmd-cli-sql-ownership.md D4).
+// Internal store helpers — NOT re-exported from src/index.ts, NOT on the store
+// object's public interface (D6). Do not consolidate; each mirrors exactly the
+// SQL the CLI used to run inline so the relocation is behavior-preserving.
+
+/** SELECT COUNT(*) FROM documents WHERE active = 1 */
+export function countActiveDocuments(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM documents WHERE active = 1`).get() as { count: number }).count;
+}
+
+/** SELECT COUNT(*) FROM content_vectors */
+export function countContentVectors(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) as count FROM content_vectors`).get() as { count: number }).count;
+}
+
+/** SELECT MAX(modified_at) FROM documents WHERE active = 1 */
+export function getLatestDocumentModifiedAt(db: Database): string | null {
+  return (db.prepare(`SELECT MAX(modified_at) as latest FROM documents WHERE active = 1`).get() as { latest: string | null }).latest;
+}
+
+/**
+ * Resolve a single document reference from the CLI multi-get comma-list syntax:
+ * a qmd:// virtual path (exact collection+path), else an exact path, else a
+ * path suffix. Verbatim relocation of the three inline lookups that used to
+ * live in qmd.ts's multiGet. Returns null when nothing matches.
+ *
+ * NOTE: deliberately distinct from findDocuments() — that resolves glob/comma
+ * patterns into full result sets (optionally with bodies); this resolves one
+ * name to its {collection,path,hash,length} ref WITHOUT the body. See spec §8.3.
+ */
+export function findDocumentRef(
+  db: Database,
+  name: string
+): { virtual_path: string; body_length: number; collection: string; path: string } | null {
+  type DocRef = { virtual_path: string; body_length: number; collection: string; path: string };
+
+  if (isVirtualPath(name)) {
+    const parsed = parseVirtualPath(name);
+    if (!parsed) return null;
+    return (db.prepare(`
+      SELECT
+        'qmd://' || d.collection || '/' || d.path as virtual_path,
+        LENGTH(content.doc) as body_length,
+        d.collection,
+        d.path
+      FROM documents d
+      JOIN content ON content.hash = d.hash
+      WHERE d.collection = ? AND d.path = ? AND d.active = 1
+    `).get(parsed.collectionName, parsed.path) as DocRef | undefined) ?? null;
+  }
+
+  // Try exact match on path
+  let doc = (db.prepare(`
+    SELECT
+      'qmd://' || d.collection || '/' || d.path as virtual_path,
+      LENGTH(content.doc) as body_length,
+      d.collection,
+      d.path
+    FROM documents d
+    JOIN content ON content.hash = d.hash
+    WHERE d.path = ? AND d.active = 1
+    LIMIT 1
+  `).get(name) as DocRef | undefined) ?? null;
+
+  // Try suffix match
+  if (!doc) {
+    doc = (db.prepare(`
+      SELECT
+        'qmd://' || d.collection || '/' || d.path as virtual_path,
+        LENGTH(content.doc) as body_length,
+        d.collection,
+        d.path
+      FROM documents d
+      JOIN content ON content.hash = d.hash
+      WHERE d.path LIKE ? AND d.active = 1
+      LIMIT 1
+    `).get(`%${name}`) as DocRef | undefined) ?? null;
+  }
+
+  return doc;
+}
+
+/**
+ * SELECT d.hash FROM documents WHERE collection+path AND active=1.
+ * Source of a document's docid (first 6 hash chars). Distinct from
+ * findDocuments(): returns only the hash, no body. See spec §8.3.
+ */
+export function getDocumentHash(db: Database, collection: string, path: string): string | null {
+  const row = db.prepare(`
+    SELECT d.hash as hash
+    FROM documents d
+    WHERE d.collection = ? AND d.path = ? AND d.active = 1
+  `).get(collection, path) as { hash: string } | null;
+  return row?.hash ?? null;
+}
+
+/** SELECT content.doc AS body, d.title WHERE collection+path AND active=1. */
+export function getDocumentContent(db: Database, collection: string, path: string): { body: string; title: string } | null {
+  return (db.prepare(`
+    SELECT content.doc as body, d.title
+    FROM documents d
+    JOIN content ON content.hash = d.hash
+    WHERE d.collection = ? AND d.path = ? AND d.active = 1
+  `).get(collection, path) as { body: string; title: string } | undefined) ?? null;
+}
+
+/** SELECT COUNT(*) FROM documents WHERE collection=? AND active=1. */
+export function countDocumentsInCollection(db: Database, collection: string): number {
+  return (db.prepare(`
+    SELECT COUNT(*) as file_count
+    FROM documents d
+    WHERE d.collection = ? AND d.active = 1
+  `).get(collection) as { file_count: number }).file_count;
+}
+
+/**
+ * List active documents in a collection with title/mtime/size, ordered by path.
+ * Optional pathPrefix restricts to paths under it (LIKE prefix%). Verbatim
+ * relocation of qmd.ts's listFiles query (both variants).
+ */
+export function listDocumentsWithMeta(
+  db: Database,
+  collection: string,
+  pathPrefix?: string
+): { path: string; title: string; modified_at: string; size: number }[] {
+  type Row = { path: string; title: string; modified_at: string; size: number };
+  if (pathPrefix) {
+    return db.prepare(`
+      SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
+      FROM documents d
+      JOIN content ct ON d.hash = ct.hash
+      WHERE d.collection = ? AND d.path LIKE ? AND d.active = 1
+      ORDER BY d.path
+    `).all(collection, `${pathPrefix}%`) as Row[];
+  }
+  return db.prepare(`
+    SELECT d.path, d.title, d.modified_at, LENGTH(ct.doc) as size
+    FROM documents d
+    JOIN content ct ON d.hash = ct.hash
+    WHERE d.collection = ? AND d.active = 1
+    ORDER BY d.path
+  `).all(collection) as Row[];
+}
+
+/** SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec' (boolean). */
+export function hasVectorTable(db: Database): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
+}
+
+/**
+ * Sample up to `limit` embedded chunks for a model+fingerprint, joined to their
+ * active document path + content. Verbatim relocation of the doctor's vector
+ * sampling query.
+ */
+export function sampleEmbeddedChunks(
+  db: Database,
+  model: string,
+  fingerprint: string,
+  limit: number
+): { hash: string; seq: number; body: string; path: string }[] {
+  return db.prepare(`
+    SELECT cv.hash, cv.seq, c.doc AS body, MIN(d.path) AS path
+    FROM content_vectors cv
+    JOIN documents d ON d.hash = cv.hash AND d.active = 1
+    JOIN content c ON c.hash = cv.hash
+    WHERE cv.model = ? AND cv.embed_fingerprint = ?
+    GROUP BY cv.hash, cv.seq, c.doc
+    ORDER BY random()
+    LIMIT ?
+  `).all(model, fingerprint, limit) as { hash: string; seq: number; body: string; path: string }[];
+}
+
+/** SELECT embedding FROM vectors_vec WHERE hash_seq=? (null when missing). */
+export function getStoredEmbedding(db: Database, hashSeq: string): Uint8Array | null {
+  const row = db.prepare(`SELECT embedding FROM vectors_vec WHERE hash_seq = ?`).get(hashSeq) as { embedding: Uint8Array } | undefined;
+  return row?.embedding ?? null;
+}
+
+/** SELECT sqlite_version() — kept separate from getVecVersion so a failure in
+ * one doctor probe does not swallow the other (spec §8.2). */
+export function getSqliteVersion(db: Database): string {
+  return (db.prepare(`SELECT sqlite_version() AS version`).get() as { version: string }).version;
+}
+
+/** SELECT vec_version() (requires the sqlite-vec extension). Separate from
+ * getSqliteVersion for independent doctor failure semantics (spec §8.2). */
+export function getVecVersion(db: Database): string {
+  return (db.prepare(`SELECT vec_version() AS version`).get() as { version: string }).version;
+}
+
+/** GROUP BY model+embed_fingerprint over content_vectors (doctor fingerprint report). */
+export function getEmbeddingFingerprintGroups(
+  db: Database
+): { model: string; fingerprint: string; docs: number; chunks: number }[] {
+  return db.prepare(`
+    SELECT model, embed_fingerprint AS fingerprint, COUNT(DISTINCT hash) AS docs, COUNT(*) AS chunks
+    FROM content_vectors
+    GROUP BY model, embed_fingerprint
+    ORDER BY chunks DESC, model, embed_fingerprint
+  `).all() as { model: string; fingerprint: string; docs: number; chunks: number }[];
 }
 
 // =============================================================================
