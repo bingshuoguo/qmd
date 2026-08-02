@@ -29,6 +29,12 @@ import {
   getDocumentContent,
   countDocumentsInCollection,
   listDocumentsWithMeta,
+  hasVectorTable,
+  sampleEmbeddedChunks,
+  getStoredEmbedding,
+  getSqliteVersion,
+  getVecVersion,
+  getEmbeddingFingerprintGroups,
   type Store,
 } from "../src/store.js";
 
@@ -211,5 +217,69 @@ describe("listDocumentsWithMeta", () => {
     await seedDoc("c1", "top.md");
     const rows = listDocumentsWithMeta(db, "c1", "sub/");
     expect(rows.map(r => r.path)).toEqual(["sub/x.md", "sub/y.md"]);
+  });
+});
+
+describe("hasVectorTable", () => {
+  test("false before vectors_vec exists, true after ensureVecTable", () => {
+    expect(hasVectorTable(db)).toBe(false);
+    store.ensureVecTable(3);
+    expect(hasVectorTable(db)).toBe(true);
+  });
+});
+
+describe("sampleEmbeddedChunks", () => {
+  test("samples embedded chunks for a model+fingerprint, joined to active doc", async () => {
+    const hash = await seedDoc("c1", "a.md", { body: "hello world body" });
+    store.ensureVecTable(3);
+    insertEmbedding(db, hash, 0, 0, new Float32Array([1, 2, 3]), "m1", new Date().toISOString(), 1, "fp1");
+
+    const rows = sampleEmbeddedChunks(db, "m1", "fp1", 5);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.hash).toBe(hash);
+    expect(rows[0]?.seq).toBe(0);
+    expect(rows[0]?.body).toBe("hello world body");
+    expect(rows[0]?.path).toBe("a.md");
+
+    // A different fingerprint matches nothing.
+    expect(sampleEmbeddedChunks(db, "m1", "other", 5)).toHaveLength(0);
+  });
+});
+
+describe("getStoredEmbedding", () => {
+  test("returns stored embedding bytes for hash_seq, null when missing", async () => {
+    const hash = await seedDoc("c1", "a.md");
+    store.ensureVecTable(3);
+    insertEmbedding(db, hash, 0, 0, new Float32Array([1, 2, 3]), "m", new Date().toISOString(), 1);
+    const emb = getStoredEmbedding(db, `${hash}_0`);
+    expect(emb).toBeInstanceOf(Uint8Array);
+    expect(getStoredEmbedding(db, "nope_0")).toBeNull();
+  });
+});
+
+describe("getSqliteVersion / getVecVersion", () => {
+  test("returns version strings", () => {
+    expect(getSqliteVersion(db).length).toBeGreaterThan(0);
+    expect(getVecVersion(db).length).toBeGreaterThan(0);
+  });
+});
+
+describe("getEmbeddingFingerprintGroups", () => {
+  test("groups content_vectors by model+fingerprint (distinct docs / total chunks)", async () => {
+    const h1 = await seedDoc("c1", "a.md");
+    const h2 = await seedDoc("c1", "b.md");
+    store.ensureVecTable(3);
+    const now = new Date().toISOString();
+    insertEmbedding(db, h1, 0, 0, new Float32Array([1, 2, 3]), "m1", now, 1, "fpA");
+    insertEmbedding(db, h2, 0, 0, new Float32Array([1, 2, 3]), "m1", now, 1, "fpA");
+    insertEmbedding(db, h1, 1, 0, new Float32Array([4, 5, 6]), "m1", now, 1, "fpB");
+
+    const rows = getEmbeddingFingerprintGroups(db);
+    const fpA = rows.find(r => r.fingerprint === "fpA");
+    expect(fpA?.docs).toBe(2);
+    expect(fpA?.chunks).toBe(2);
+    const fpB = rows.find(r => r.fingerprint === "fpB");
+    expect(fpB?.docs).toBe(1);
+    expect(fpB?.chunks).toBe(1);
   });
 });

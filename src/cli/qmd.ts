@@ -86,6 +86,12 @@ import {
   getDocumentContent,
   countDocumentsInCollection,
   listDocumentsWithMeta,
+  hasVectorTable,
+  sampleEmbeddedChunks,
+  getStoredEmbedding,
+  getSqliteVersion,
+  getVecVersion,
+  getEmbeddingFingerprintGroups,
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
@@ -3554,21 +3560,11 @@ async function checkEmbeddingVectorSamples(db: Database, model: string, fingerpr
     return { ok: true, details: "no active documents indexed" };
   }
 
-  const vecTableExists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
-  if (!vecTableExists) {
+  if (!hasVectorTable(db)) {
     return { ok: false, details: "no vector table to test; please run qmd embed again" };
   }
 
-  const samples = db.prepare(`
-    SELECT cv.hash, cv.seq, c.doc AS body, MIN(d.path) AS path
-    FROM content_vectors cv
-    JOIN documents d ON d.hash = cv.hash AND d.active = 1
-    JOIN content c ON c.hash = cv.hash
-    WHERE cv.model = ? AND cv.embed_fingerprint = ?
-    GROUP BY cv.hash, cv.seq, c.doc
-    ORDER BY random()
-    LIMIT ?
-  `).all(model, fingerprint, sampleSize) as { hash: string; seq: number; body: string; path: string }[];
+  const samples = sampleEmbeddedChunks(db, model, fingerprint, sampleSize);
 
   if (samples.length === 0) {
     return { ok: false, details: "no current embedded chunks to test; please run qmd embed again" };
@@ -3594,13 +3590,13 @@ async function checkEmbeddingVectorSamples(db: Database, model: string, fingerpr
         continue;
       }
 
-      const stored = db.prepare(`SELECT embedding FROM vectors_vec WHERE hash_seq = ?`).get(hashSeq) as { embedding: Uint8Array } | undefined;
-      if (!stored) {
+      const storedEmbedding = getStoredEmbedding(db, hashSeq);
+      if (!storedEmbedding) {
         mismatches.push(`${shortHashSeq(hashSeq)}: stored vector missing`);
         continue;
       }
 
-      const distance = cosineDistance(result.embedding, decodeStoredEmbedding(stored.embedding));
+      const distance = cosineDistance(result.embedding, decodeStoredEmbedding(storedEmbedding));
       if (distance > threshold) {
         mismatches.push(`${shortHashSeq(hashSeq)}: stored vector distance ${distance.toFixed(6)}`);
       }
@@ -3766,8 +3762,7 @@ async function showDoctor(): Promise<void> {
   console.log(`Runtime: ${isBun ? "bun:sqlite" : "better-sqlite3"}`);
 
   try {
-    const row = db.prepare(`SELECT sqlite_version() AS version`).get() as { version: string };
-    doctorCheck("SQLite runtime", true, row.version);
+    doctorCheck("SQLite runtime", true, getSqliteVersion(db));
   } catch (error) {
     doctorCheck("SQLite runtime", false, error instanceof Error ? error.message : String(error));
   }
@@ -3776,8 +3771,7 @@ async function showDoctor(): Promise<void> {
   doctorCheck("better-sqlite3 package", true, String(betterSqliteVersion));
 
   try {
-    const row = db.prepare(`SELECT vec_version() AS version`).get() as { version: string };
-    doctorCheck("sqlite-vec", true, row.version);
+    doctorCheck("sqlite-vec", true, getVecVersion(db));
   } catch (error) {
     doctorCheck("sqlite-vec", false, error instanceof Error ? error.message : String(error));
   }
@@ -3810,12 +3804,7 @@ async function showDoctor(): Promise<void> {
   }
 
   try {
-    const rows = db.prepare(`
-      SELECT model, embed_fingerprint AS fingerprint, COUNT(DISTINCT hash) AS docs, COUNT(*) AS chunks
-      FROM content_vectors
-      GROUP BY model, embed_fingerprint
-      ORDER BY chunks DESC, model, embed_fingerprint
-    `).all() as { model: string; fingerprint: string; docs: number; chunks: number }[];
+    const rows = getEmbeddingFingerprintGroups(db);
     const uniqueFingerprints = new Set(rows.map(row => row.fingerprint));
     const offCurrent = rows.filter(row => row.model === embedModel && row.fingerprint !== fingerprint);
     const ok = rows.length === 0 || (uniqueFingerprints.size === 1 && rows[0]?.fingerprint === fingerprint && offCurrent.length === 0);

@@ -3123,6 +3123,64 @@ export function listDocumentsWithMeta(
   `).all(collection) as Row[];
 }
 
+/** SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec' (boolean). */
+export function hasVectorTable(db: Database): boolean {
+  return !!db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors_vec'`).get();
+}
+
+/**
+ * Sample up to `limit` embedded chunks for a model+fingerprint, joined to their
+ * active document path + content. Verbatim relocation of the doctor's vector
+ * sampling query.
+ */
+export function sampleEmbeddedChunks(
+  db: Database,
+  model: string,
+  fingerprint: string,
+  limit: number
+): { hash: string; seq: number; body: string; path: string }[] {
+  return db.prepare(`
+    SELECT cv.hash, cv.seq, c.doc AS body, MIN(d.path) AS path
+    FROM content_vectors cv
+    JOIN documents d ON d.hash = cv.hash AND d.active = 1
+    JOIN content c ON c.hash = cv.hash
+    WHERE cv.model = ? AND cv.embed_fingerprint = ?
+    GROUP BY cv.hash, cv.seq, c.doc
+    ORDER BY random()
+    LIMIT ?
+  `).all(model, fingerprint, limit) as { hash: string; seq: number; body: string; path: string }[];
+}
+
+/** SELECT embedding FROM vectors_vec WHERE hash_seq=? (null when missing). */
+export function getStoredEmbedding(db: Database, hashSeq: string): Uint8Array | null {
+  const row = db.prepare(`SELECT embedding FROM vectors_vec WHERE hash_seq = ?`).get(hashSeq) as { embedding: Uint8Array } | undefined;
+  return row?.embedding ?? null;
+}
+
+/** SELECT sqlite_version() — kept separate from getVecVersion so a failure in
+ * one doctor probe does not swallow the other (spec §8.2). */
+export function getSqliteVersion(db: Database): string {
+  return (db.prepare(`SELECT sqlite_version() AS version`).get() as { version: string }).version;
+}
+
+/** SELECT vec_version() (requires the sqlite-vec extension). Separate from
+ * getSqliteVersion for independent doctor failure semantics (spec §8.2). */
+export function getVecVersion(db: Database): string {
+  return (db.prepare(`SELECT vec_version() AS version`).get() as { version: string }).version;
+}
+
+/** GROUP BY model+embed_fingerprint over content_vectors (doctor fingerprint report). */
+export function getEmbeddingFingerprintGroups(
+  db: Database
+): { model: string; fingerprint: string; docs: number; chunks: number }[] {
+  return db.prepare(`
+    SELECT model, embed_fingerprint AS fingerprint, COUNT(DISTINCT hash) AS docs, COUNT(*) AS chunks
+    FROM content_vectors
+    GROUP BY model, embed_fingerprint
+    ORDER BY chunks DESC, model, embed_fingerprint
+  `).all() as { model: string; fingerprint: string; docs: number; chunks: number }[];
+}
+
 // =============================================================================
 // Context
 // =============================================================================
