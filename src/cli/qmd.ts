@@ -72,12 +72,10 @@ import {
   DEFAULT_GLOB,
   DEFAULT_MULTI_GET_MAX_BYTES,
   createStore,
-  getDefaultDbPath,
   reindexCollection,
   generateEmbeddings,
   maybeAdoptLegacyEmbeddingFingerprint,
   syncConfigToDb,
-  invalidateConfigCache,
   countActiveDocuments,
   countContentVectors,
   getLatestDocumentModifiedAt,
@@ -95,7 +93,7 @@ import {
   type ReindexResult,
   type ChunkStrategy,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, setDefaultLlamaCpp, LlamaCpp, withLLMSession, pullModels, DEFAULT_MODEL_CACHE_DIR, resolveEmbedModel, resolveGenerateModel, resolveRerankModel, resolveModels, inspectGgufFile, isDarwinMetalMitigationActive } from "../llm.js";
+import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, withLLMSession, pullModels, DEFAULT_MODEL_CACHE_DIR, resolveEmbedModel, resolveGenerateModel, resolveRerankModel, resolveModels, inspectGgufFile, isDarwinMetalMitigationActive } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
@@ -124,6 +122,42 @@ import {
   type CollectionConfig,
   type ModelsConfig,
 } from "../collections.js";
+import {
+  getStore,
+  getDb,
+  resyncConfig,
+  closeDb,
+  getDbPath,
+  setStoreDbPathOverride,
+  getActiveIndexName,
+  setIndexName,
+  ensureVecTable,
+  ensureModelsConfiguredForCli,
+  resolveEmbedModelForCli,
+  resolveModelsForCli,
+} from "./context.js";
+import {
+  c,
+  cursor,
+  isTTY,
+  progress,
+  formatETA,
+  formatTimeAgo,
+  formatMs,
+  formatBytes,
+  renderProgressBar,
+  highlightTerms,
+  formatScore,
+  formatExplainNumber,
+} from "./term.js";
+
+// I4: these remain importable from src/cli/qmd.ts for existing consumers
+// (test/cli.test.ts, cli-exit-lifecycle.test.ts) after moving to context.ts.
+export {
+  resolveEmbedModelForCli,
+  resolveGenerateModelForCli,
+  resolveRerankModelForCli,
+} from "./context.js";
 
 // NOTE: enableProductionMode() is intentionally NOT called at module scope here.
 // Importing this module for its exports (e.g. buildEditorUri, termLink from
@@ -131,104 +165,6 @@ import {
 // into unrelated tests that rely on the default (development) database path
 // resolution. The flag is flipped inside the CLI's main-module guard below so
 // it only fires when qmd is actually invoked as a script.
-
-// =============================================================================
-// Store/DB lifecycle (no legacy singletons in store.ts)
-// =============================================================================
-
-let store: ReturnType<typeof createStore> | null = null;
-let storeDbPathOverride: string | undefined;
-let currentIndexName = "index";
-
-function getStore(): ReturnType<typeof createStore> {
-  if (!store) {
-    store = createStore(storeDbPathOverride);
-    // Sync YAML config into SQLite store_collections so store.ts reads from DB
-    try {
-      const activeModels = ensureModelsConfiguredForCli();
-      const config = loadConfig();
-      syncConfigToDb(store.db, config);
-      setDefaultLlamaCpp(new LlamaCpp({
-        embedModel: activeModels.embed,
-        generateModel: activeModels.generate,
-        rerankModel: activeModels.rerank,
-      }));
-    } catch {
-      // Config may not exist yet — that's fine, DB works without it
-    }
-  }
-  return store;
-}
-
-function getDb(): Database {
-  return getStore().db;
-}
-
-/** Re-sync YAML config into SQLite after CLI mutations (add/remove/rename collection, context changes) */
-function resyncConfig(): void {
-  const s = getStore();
-  try {
-    const config = loadConfig();
-    // Clear config hash to force re-sync
-    invalidateConfigCache(s.db);
-    syncConfigToDb(s.db, config);
-  } catch {
-    // Config may not exist — that's fine
-  }
-}
-
-function closeDb(): void {
-  if (store) {
-    store.close();
-    store = null;
-  }
-}
-
-function getDbPath(): string {
-  return store?.dbPath ?? storeDbPathOverride ?? getDefaultDbPath();
-}
-
-function getActiveIndexName(): string {
-  return currentIndexName;
-}
-
-function setIndexName(name: string | null): void {
-  let normalizedName = name;
-  // Normalize relative paths to prevent malformed database paths
-  if (name && name.includes('/')) {
-    const absolutePath = pathResolve(process.cwd(), name);
-    // Replace path separators with underscores to create a valid filename
-    normalizedName = absolutePath.replace(/\//g, '_').replace(/^_/, '');
-  }
-  currentIndexName = normalizedName || "index";
-  storeDbPathOverride = normalizedName ? getDefaultDbPath(normalizedName) : undefined;
-  // Reset open handle so next use opens the new index
-  closeDb();
-}
-
-function ensureVecTable(_db: Database, dimensions: number): void {
-  // Store owns the DB; ignore `_db` and ensure vec table on the active store
-  getStore().ensureVecTable(dimensions);
-}
-
-// Terminal colors (respects NO_COLOR env)
-const useColor = !process.env.NO_COLOR && process.stdout.isTTY;
-const c = {
-  reset: useColor ? "\x1b[0m" : "",
-  dim: useColor ? "\x1b[2m" : "",
-  bold: useColor ? "\x1b[1m" : "",
-  cyan: useColor ? "\x1b[36m" : "",
-  yellow: useColor ? "\x1b[33m" : "",
-  green: useColor ? "\x1b[32m" : "",
-  magenta: useColor ? "\x1b[35m" : "",
-  blue: useColor ? "\x1b[34m" : "",
-};
-
-// Terminal cursor control
-const cursor = {
-  hide() { process.stderr.write('\x1b[?25l'); },
-  show() { process.stderr.write('\x1b[?25h'); },
-};
 
 type CliLifecycleWritable = {
   write(chunk: string | Uint8Array, callback?: (error?: Error | null) => void): boolean;
@@ -295,34 +231,6 @@ export async function finishSuccessfulCliCommand(options: FinishSuccessfulCliCom
   process.exitCode = 0;
 }
 
-// Ensure cursor is restored on exit
-process.on('SIGINT', () => { cursor.show(); process.exit(130); });
-process.on('SIGTERM', () => { cursor.show(); process.exit(143); });
-
-// Terminal progress bar using OSC 9;4 escape sequence (TTY only)
-const isTTY = process.stderr.isTTY;
-const progress = {
-  set(percent: number) {
-    if (isTTY) process.stderr.write(`\x1b]9;4;1;${Math.round(percent)}\x07`);
-  },
-  clear() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;0\x07`);
-  },
-  indeterminate() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;3\x07`);
-  },
-  error() {
-    if (isTTY) process.stderr.write(`\x1b]9;4;2\x07`);
-  },
-};
-
-// Format seconds into human-readable ETA
-function formatETA(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
-
 
 // Check index health and print warnings/tips
 function checkIndexHealth(db: Database, model: string = resolveEmbedModelForCli()): void {
@@ -381,29 +289,6 @@ function computeDisplayPath(
 }
 
 
-function formatTimeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
 function sameDirectory(a: string, b: string): boolean {
   try {
     return realpathSync(a) === realpathSync(b);
@@ -426,7 +311,7 @@ function initLocalIndex(): void {
 
   mkdirSync(qmdDir, { recursive: true });
   setConfigSource({ configPath });
-  storeDbPathOverride = dbPath;
+  setStoreDbPathOverride(dbPath);
   closeDb();
 
   if (!existsSync(configPath)) {
@@ -1719,13 +1604,6 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   closeDb();
 }
 
-function renderProgressBar(percent: number, width: number = 30): string {
-  const filled = Math.round((percent / 100) * width);
-  const empty = width - filled;
-  const bar = "█".repeat(filled) + "░".repeat(empty);
-  return bar;
-}
-
 function parseEmbedBatchOption(name: string, value: unknown): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -1751,44 +1629,6 @@ function parseEmbedTimeoutOption(value: unknown): number | undefined {
     throw new Error(`--timeout must be a non-negative number of minutes (0 = no limit)`);
   }
   return minutes * 60 * 1000;
-}
-
-function ensureModelsConfiguredForCli(): { embed: string; generate: string; rerank: string } {
-  try {
-    const config = loadConfig();
-    const models = resolveModels(config.models);
-    const current = config.models ?? {};
-    if (current.embed !== models.embed || current.generate !== models.generate || current.rerank !== models.rerank) {
-      saveConfig({
-        ...config,
-        models: {
-          ...current,
-          embed: models.embed,
-          generate: models.generate,
-          rerank: models.rerank,
-        },
-      });
-    }
-    return models;
-  } catch {
-    return resolveModels();
-  }
-}
-
-export function resolveEmbedModelForCli(): string {
-  return ensureModelsConfiguredForCli().embed;
-}
-
-export function resolveGenerateModelForCli(): string {
-  return ensureModelsConfiguredForCli().generate;
-}
-
-export function resolveRerankModelForCli(): string {
-  return ensureModelsConfiguredForCli().rerank;
-}
-
-function resolveModelsForCli(): { embed: string; generate: string; rerank: string } {
-  return ensureModelsConfiguredForCli();
 }
 
 async function vectorIndex(
@@ -1939,40 +1779,6 @@ type OutputOptions = {
   chunkStrategy?: ChunkStrategy;  // "auto" (default) or "regex"
   fullPath?: boolean;    // Show realpath instead of qmd:// URI (relative to $PWD when subpath)
 };
-
-// Highlight query terms in text (skip short words < 3 chars)
-function highlightTerms(text: string, query: string): string {
-  if (!useColor) return text;
-  const terms = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
-  let result = text;
-  for (const term of terms) {
-    const regex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-    result = result.replace(regex, `${c.yellow}${c.bold}$1${c.reset}`);
-  }
-  return result;
-}
-
-// Format score with color based on value
-function formatScore(score: number): string {
-  const pct = (score * 100).toFixed(0).padStart(3);
-  if (!useColor) return `${pct}%`;
-  if (score >= 0.7) return `${c.green}${pct}%${c.reset}`;
-  if (score >= 0.4) return `${c.yellow}${pct}%${c.reset}`;
-  return `${c.dim}${pct}%${c.reset}`;
-}
-
-function formatExplainNumber(value: number): string {
-  return value.toFixed(4);
-}
-
-// Shorten directory path for display - relative to $HOME (used for context paths, not documents)
-function shortPath(dirpath: string): string {
-  const home = homedir();
-  if (dirpath.startsWith(home)) {
-    return '~' + dirpath.slice(home.length);
-  }
-  return dirpath;
-}
 
 type EmptySearchReason = "no_results" | "min_score";
 
@@ -2728,7 +2534,7 @@ function parseCLI() {
     const localConfigPath = findLocalConfigPath();
     if (localConfigPath) {
       setConfigSource({ configPath: localConfigPath });
-      storeDbPathOverride = getLocalDbPath(localConfigPath);
+      setStoreDbPathOverride(getLocalDbPath(localConfigPath));
       closeDb();
     } else {
       setConfigSource();
