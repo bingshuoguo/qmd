@@ -1,4 +1,4 @@
 exit: 0
 --- stderr ---
 --- stdout ---
-qmd 2.6.3 (<COMMIT>)
+qmd <VERSION> (<COMMIT>)

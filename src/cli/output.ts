@@ -348,12 +348,7 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
 
 export {
   type OutputOptions,
-  type EmptySearchReason,
   printEmptySearchResults,
-  type OutputRow,
-  DEFAULT_EDITOR_URI_TEMPLATE,
-  encodePathForEditorUri,
-  getEditorUriTemplate,
   buildEditorUri,
   termLink,
   outputResults,
