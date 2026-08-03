@@ -1,0 +1,13 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+Usage: qmd skill <show|install> [options]
+
+Commands:
+  show                 Print the QMD skill
+  install              Install QMD skill into ./.agents/skills/qmd
+
+Options:
+  --global             Install into ~/.agents/skills/qmd
+  --yes                Also create the .claude/skills/qmd symlink
+  -f, --force          Replace existing install or symlink

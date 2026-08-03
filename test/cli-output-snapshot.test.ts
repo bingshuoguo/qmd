@@ -130,6 +130,9 @@ const CASES: { name: string; args: string[] }[] = [
   { name: "help-noargs", args: [] },
   { name: "version", args: ["--version"] },
   { name: "skill-help", args: ["skill", "-h"] },
+  { name: "skill-help-subcmd", args: ["skill", "help"] },
+  { name: "collection-help", args: ["collection", "help"] },
+  { name: "context-noargs", args: ["context"] },
   // error paths: stderr text + exit codes
   { name: "error-get-missing", args: ["get", "qmd://snap/nope.md"] },
   { name: "error-unknown-command", args: ["frobnicate"] },
