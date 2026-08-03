@@ -211,7 +211,6 @@ export {
   showCollectionHelp,
   printContextUsage,
   printDoctorHint,
-  type PackageJson,
   readPackageJson,
   showVersion,
 };
