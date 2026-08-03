@@ -1,0 +1,37 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+QMD Status
+
+Index: <TMP>/index.sqlite
+Size: <SIZE>
+
+Documents
+  Total:    3 files indexed
+  Vectors:  0 embedded
+  Pending:  3 need embedding (run 'qmd embed')
+  Updated:  <AGO>
+
+AST Chunking
+  Status:   active
+  Languages: typescript, tsx, javascript, python, go, rust
+
+Collections
+  snap (qmd://snap/)
+    Pattern:  **/*.md
+    Files:    3 (updated <AGO>)
+    Contexts: 1
+      /: Snapshot fixture collection
+
+Examples
+  # List files in a collection
+  qmd ls snap
+  # Get a document
+  qmd get qmd://snap/path/to/file.md
+  # Search within a collection
+  qmd search "query" -c snap
+
+Models
+  Embedding:   https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF
+  Reranking:   https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF
+  Generation:  https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf
