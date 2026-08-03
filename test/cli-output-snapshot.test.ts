@@ -79,16 +79,18 @@ async function runQmd(
   return { stdout: await stdoutPromise, stderr: await stderrPromise, exitCode };
 }
 
-// Mask the four volatile classes: machine-specific paths, relative times
-// ("3m ago"), the SQLite index byte size, and the git commit hash embedded
-// in `qmd --version` output.
+// Mask the five volatile classes: machine-specific paths, relative times
+// ("3m ago"), the SQLite index byte size, the git commit hash, and the
+// package.json version — the last two both ride in `qmd --version` output
+// and would otherwise break snapshots on every commit/release.
 function normalize(s: string): string {
   return s
     .split(realTestDir).join("<TMP>")
     .split(testDir).join("<TMP>")
     .replace(/\d+[smhd] ago/g, "<AGO>")
     .replace(/^Size:.*$/gm, "Size: <SIZE>")
-    .replace(/\([0-9a-f]{7,40}\)/g, "(<COMMIT>)");
+    .replace(/\([0-9a-f]{7,40}\)/g, "(<COMMIT>)")
+    .replace(/^qmd \d+\.\d+\.\d+ /gm, "qmd <VERSION> ");
 }
 
 function goldenBody(result: { stdout: string; stderr: string; exitCode: number }): string {
