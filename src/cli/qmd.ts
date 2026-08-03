@@ -1,7 +1,7 @@
 import { isBun, openDatabase } from "../db.js";
 import type { Database } from "../db.js";
 import fastGlob from "fast-glob";
-import { execSync, spawn as nodeSpawn } from "child_process";
+import { spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
 import { basename, dirname, join as pathJoin, relative as relativePath, resolve as pathResolve } from "path";
 import { parseArgs } from "util";
@@ -14,7 +14,6 @@ import {
   resolve,
   enableProductionMode,
   searchFTS,
-  extractSnippet,
   getContextForFile,
   getContextForPath,
   listCollections,
@@ -63,7 +62,6 @@ import {
   structuredSearch,
   addLineNumbers,
   type ExpandedQuery,
-  type HybridQueryExplain,
   DEFAULT_EMBED_MODEL,
   DEFAULT_EMBED_MAX_BATCH_BYTES,
   DEFAULT_EMBED_MAX_DOCS_PER_BATCH,
@@ -98,7 +96,6 @@ import {
   formatSearchResults,
   formatDocuments,
   escapeXml,
-  escapeCSV,
   type OutputFormat,
 } from "./formatter.js";
 import {
@@ -150,6 +147,19 @@ import {
   formatScore,
   formatExplainNumber,
 } from "./term.js";
+import { renderFullPath } from "./commands/docs.js";
+import {
+  printEmptySearchResults,
+  outputResults,
+  type OutputOptions,
+} from "./output.js";
+import {
+  showHelp,
+  showSkillsHelp,
+  printDoctorHint,
+  readPackageJson,
+  showVersion,
+} from "./help.js";
 
 // I4: these remain importable from src/cli/qmd.ts for existing consumers
 // (test/cli.test.ts, cli-exit-lifecycle.test.ts) after moving to context.ts.
@@ -158,6 +168,7 @@ export {
   resolveGenerateModelForCli,
   resolveRerankModelForCli,
 } from "./context.js";
+export { buildEditorUri, termLink } from "./output.js";
 
 // NOTE: enableProductionMode() is intentionally NOT called at module scope here.
 // Importing this module for its exports (e.g. buildEditorUri, termLink from
@@ -254,41 +265,6 @@ function checkIndexHealth(db: Database, model: string = resolveEmbedModelForCli(
 
 // Compute unique display path for a document
 // Always include at least parent folder + filename, add more parent dirs until unique
-function computeDisplayPath(
-  filepath: string,
-  collectionPath: string,
-  existingPaths: Set<string>
-): string {
-  // Get path relative to collection (include collection dir name)
-  const collectionDir = collectionPath.replace(/\/$/, '');
-  const collectionName = collectionDir.split('/').pop() || '';
-
-  let relativePath: string;
-  if (filepath.startsWith(collectionDir + '/')) {
-    // filepath is under collection: use collection name + relative path
-    relativePath = collectionName + filepath.slice(collectionDir.length);
-  } else {
-    // Fallback: just use the filepath
-    relativePath = filepath;
-  }
-
-  const parts = relativePath.split('/').filter(p => p.length > 0);
-
-  // Always include at least parent folder + filename (minimum 2 parts if available)
-  // Then add more parent dirs until unique
-  const minParts = Math.min(2, parts.length);
-  for (let i = parts.length - minParts; i >= 0; i--) {
-    const candidate = parts.slice(i).join('/');
-    if (!existingPaths.has(candidate)) {
-      return candidate;
-    }
-  }
-
-  // Absolute fallback: use full path (should be unique)
-  return filepath;
-}
-
-
 function sameDirectory(a: string, b: string): boolean {
   try {
     return realpathSync(a) === realpathSync(b);
@@ -855,18 +831,6 @@ function contextRemove(pathArg: string): void {
  * consistently. Returns `null` if the path could not be normalized — callers
  * fall back to whatever they had before.
  */
-function renderFullPath(absolutePath: string, cwd: string = process.cwd()): string {
-  let real: string;
-  try { real = realpathSync(absolutePath); } catch { real = absolutePath; }
-  const cwdReal = (() => { try { return realpathSync(cwd); } catch { return cwd; } })();
-  if (real === cwdReal) return "./";
-  if (real.startsWith(cwdReal + "/")) {
-    const rel = relativePath(cwdReal, real);
-    if (rel && !rel.startsWith("..")) return `./${rel}`;
-  }
-  return real;
-}
-
 function getDocument(filename: string, fromLine?: number, maxLines?: number, lineNumbers?: boolean, fullPath: boolean = false): void {
   // Parse :line suffix from filename. Two forms:
   //   "file.md:100"     -> start at line 100
@@ -1763,328 +1727,6 @@ function normalizeBM25(score: number): number {
   return 1 / (1 + Math.exp(-(absScore - 5) / 3));
 }
 
-type OutputOptions = {
-  format: OutputFormat;
-  full: boolean;
-  limit: number;
-  minScore: number;
-  all?: boolean;
-  collection?: string | string[];  // Filter by collection name(s)
-  lineNumbers?: boolean; // Add line numbers to output
-  explain?: boolean;     // Include retrieval score traces (query only)
-  context?: string;      // Optional context for query expansion
-  candidateLimit?: number;  // Max candidates to rerank (default: 40)
-  intent?: string;       // Domain intent for disambiguation
-  skipRerank?: boolean;  // Skip LLM reranking, use RRF scores only
-  chunkStrategy?: ChunkStrategy;  // "auto" (default) or "regex"
-  fullPath?: boolean;    // Show realpath instead of qmd:// URI (relative to $PWD when subpath)
-};
-
-type EmptySearchReason = "no_results" | "min_score";
-
-// Emit format-safe empty output for search commands.
-function printEmptySearchResults(format: OutputFormat, reason: EmptySearchReason = "no_results"): void {
-  if (format === "json") {
-    console.log("[]");
-    return;
-  }
-  if (format === "csv") {
-    console.log("docid,score,file,title,context,line,snippet");
-    return;
-  }
-  if (format === "xml") {
-    console.log("<results></results>");
-    return;
-  }
-  if (format === "md" || format === "files") {
-    return;
-  }
-
-  if (reason === "min_score") {
-    console.log("No results found above minimum score threshold.");
-    return;
-  }
-  console.log("No results found.");
-}
-
-type OutputRow = {
-  file: string;
-  displayPath: string;
-  title: string;
-  body: string;
-  score: number;
-  context?: string | null;
-  chunkPos?: number;
-  chunkLen?: number;
-  hash?: string;
-  docid?: string;
-  explain?: HybridQueryExplain;
-};
-
-const DEFAULT_EDITOR_URI_TEMPLATE = "vscode://file/{path}:{line}:{col}";
-
-function encodePathForEditorUri(absolutePath: string): string {
-  return encodeURI(absolutePath)
-    .replace(/\?/g, "%3F")
-    .replace(/#/g, "%23");
-}
-
-function getEditorUriTemplate(): string {
-  const envTemplate = process.env.QMD_EDITOR_URI?.trim();
-  if (envTemplate) return envTemplate;
-
-  try {
-    const config = loadConfig() as unknown as {
-      editor_uri?: string;
-      editor_uri_template?: string;
-      editorUri?: string;
-      [key: string]: unknown;
-    };
-    const configTemplate = (
-      config.editor_uri
-      || config.editor_uri_template
-      || config.editorUri
-      || (typeof config["editor-uri"] === "string" ? config["editor-uri"] : undefined)
-    )?.trim();
-
-    if (configTemplate) return configTemplate;
-  } catch {
-    // Ignore config parsing issues and use default template.
-  }
-
-  return DEFAULT_EDITOR_URI_TEMPLATE;
-}
-
-export function buildEditorUri(template: string, absolutePath: string, line: number, col: number): string {
-  const safeLine = Number.isFinite(line) && line > 0 ? Math.floor(line) : 1;
-  const safeCol = Number.isFinite(col) && col > 0 ? Math.floor(col) : 1;
-  const encodedPath = encodePathForEditorUri(absolutePath);
-
-  return template
-    .replace(/\{path\}/g, encodedPath)
-    .replace(/\{line\}/g, String(safeLine))
-    .replace(/\{col\}/g, String(safeCol))
-    .replace(/\{column\}/g, String(safeCol));
-}
-
-export function termLink(text: string, url: string, isTTY: boolean = !!process.stdout.isTTY): string {
-  if (!isTTY) return text;
-  return `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
-}
-
-function outputResults(results: OutputRow[], query: string, opts: OutputOptions): void {
-  const filtered = results.filter(r => r.score >= opts.minScore).slice(0, opts.limit);
-
-  if (filtered.length === 0) {
-    printEmptySearchResults(opts.format, "min_score");
-    return;
-  }
-
-  // Helper to create qmd:// URI from displayPath
-  const toQmdPath = (displayPath: string) => {
-    const [collectionName, ...segments] = displayPath.split("/");
-    if (!collectionName || segments.length === 0) {
-      return `qmd://${displayPath}`;
-    }
-    const indexName = getActiveIndexName();
-    return buildVirtualPath(
-      collectionName,
-      segments.join("/"),
-      indexName === "index" ? undefined : indexName,
-    );
-  };
-
-  // Helper to pick the visible path for a result. With --full-path we swap
-  // the qmd:// URI for the file's on-disk path via renderFullPath() (./-
-  // prefixed relative when under $PWD, absolute realpath otherwise). Falls
-  // back to qmd:// if the file is no longer resolvable on disk.
-  const linkDbForPaths = opts.fullPath ? getDb() : null;
-  const displayPathFor = (row: OutputRow): string => {
-    // Always rebuild from displayPath so the active index name is included
-    // as ?index=… for non-default indexes. row.file may not carry it.
-    const qmdUri = toQmdPath(row.displayPath);
-    if (!opts.fullPath || !linkDbForPaths) return qmdUri;
-    const absolute = resolveVirtualPath(linkDbForPaths, qmdUri);
-    if (!absolute || !existsSync(absolute)) return qmdUri;
-    return renderFullPath(absolute);
-  };
-
-  if (opts.format === "json") {
-    // JSON output for LLM consumption
-    const output = filtered.map(row => {
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : undefined);
-      const snippetInfo = extractSnippet(row.body, query, 300, row.chunkPos, row.chunkLen, opts.intent);
-      let body = opts.full ? row.body : undefined;
-      let snippet = !opts.full ? snippetInfo.snippet : undefined;
-      if (opts.lineNumbers) {
-        if (body) body = addLineNumbers(body);
-        if (snippet) snippet = addLineNumbers(snippet);
-      }
-      // With --full-path, omit docid (the on-disk path is the identifier).
-      return {
-        ...(docid && !opts.fullPath && { docid: `#${docid}` }),
-        score: Math.round(row.score * 100) / 100,
-        file: displayPathFor(row),
-        line: snippetInfo.line,
-        title: row.title,
-        ...(row.context && { context: row.context }),
-        ...(body && { body }),
-        ...(snippet && { snippet }),
-        ...(opts.explain && row.explain && { explain: row.explain }),
-      };
-    });
-    console.log(JSON.stringify(output, null, 2));
-  } else if (opts.format === "files") {
-    // Simple docid,score,filepath,context output
-    for (const row of filtered) {
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : "");
-      const ctx = row.context ? `,"${row.context.replace(/"/g, '""')}"` : "";
-      if (opts.fullPath) {
-        // --full-path: drop the docid, the on-disk path is the identifier.
-        console.log(`${row.score.toFixed(2)},${displayPathFor(row)}${ctx}`);
-      } else {
-        console.log(`#${docid},${row.score.toFixed(2)},${displayPathFor(row)}${ctx}`);
-      }
-    }
-  } else if (opts.format === "cli") {
-    const editorUriTemplate = getEditorUriTemplate();
-    const linkDb = getDb();
-
-    for (let i = 0; i < filtered.length; i++) {
-      const row = filtered[i];
-      if (!row) continue;
-      const { line, snippet } = extractSnippet(row.body, query, 500, row.chunkPos, row.chunkLen, opts.intent);
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : undefined);
-
-      // Line 1: filepath with docid
-      // Default: show the full qmd:// URI so the user can see which collection
-      // a hit lives in and can pipe the same string straight back into
-      // `qmd get`. A bare collection-relative path like `sources/foo.md` is
-      // ambiguous: it's not a real filesystem path, not a URI, and not a
-      // shell-friendly identifier on its own.
-      // With --full-path the visible label is the file's on-disk path
-      // ($PWD-relative when in a subfolder; absolute realpath otherwise),
-      // and the docid is omitted because the path is the identifier.
-      const virtualPath = toQmdPath(row.displayPath);
-      const parsed = parseVirtualPath(virtualPath);
-      const absolutePath = resolveVirtualPath(linkDb, virtualPath);
-      const visiblePath = displayPathFor(row);
-
-      // Only show :line if we actually found a term match in the snippet body (exclude header line).
-      const snippetBody = snippet.split("\n").slice(1).join("\n").toLowerCase();
-      const hasMatch = query.toLowerCase().split(/\s+/).some(t => t.length > 0 && snippetBody.includes(t));
-      const lineInfo = hasMatch ? `:${line}` : "";
-      const docidStr = (docid && !opts.fullPath) ? ` ${c.dim}#${docid}${c.reset}` : "";
-
-      if (process.stdout.isTTY && absolutePath && parsed?.path) {
-        const linkLine = hasMatch ? line : 1;
-        const linkTarget = buildEditorUri(editorUriTemplate, absolutePath, linkLine, 1);
-        const clickable = termLink(`${visiblePath}${lineInfo}`, linkTarget);
-        console.log(`${c.cyan}${clickable}${c.reset}${docidStr}`);
-      } else {
-        console.log(`${c.cyan}${visiblePath}${c.dim}${lineInfo}${c.reset}${docidStr}`);
-      }
-
-      // Line 2: Title (if available)
-      if (row.title) {
-        console.log(`${c.bold}Title: ${row.title}${c.reset}`);
-      }
-
-      // Line 3: Context (if available)
-      if (row.context) {
-        console.log(`${c.dim}Context: ${row.context}${c.reset}`);
-      }
-
-      // Line 4: Score
-      const score = formatScore(row.score);
-      console.log(`Score: ${c.bold}${score}${c.reset}`);
-      if (opts.explain && row.explain) {
-        const explain = row.explain;
-        const ftsScores = explain.ftsScores.length > 0
-          ? explain.ftsScores.map(formatExplainNumber).join(", ")
-          : "none";
-        const vecScores = explain.vectorScores.length > 0
-          ? explain.vectorScores.map(formatExplainNumber).join(", ")
-          : "none";
-        const contribSummary = explain.rrf.contributions
-          .slice()
-          .sort((a, b) => b.rrfContribution - a.rrfContribution)
-          .slice(0, 3)
-          .map(c => `${c.source}/${c.queryType}#${c.rank}:${formatExplainNumber(c.rrfContribution)}`)
-          .join(" | ");
-
-        console.log(`${c.dim}Explain: fts=[${ftsScores}] vec=[${vecScores}]${c.reset}`);
-        console.log(`${c.dim}  RRF: total=${formatExplainNumber(explain.rrf.totalScore)} base=${formatExplainNumber(explain.rrf.baseScore)} bonus=${formatExplainNumber(explain.rrf.topRankBonus)} rank=${explain.rrf.rank}${c.reset}`);
-        console.log(`${c.dim}  Blend: ${Math.round(explain.rrf.weight * 100)}%*${formatExplainNumber(explain.rrf.positionScore)} + ${Math.round((1 - explain.rrf.weight) * 100)}%*${formatExplainNumber(explain.rerankScore)} = ${formatExplainNumber(explain.blendedScore)}${c.reset}`);
-        if (contribSummary.length > 0) {
-          console.log(`${c.dim}  Top RRF contributions: ${contribSummary}${c.reset}`);
-        }
-      }
-      console.log();
-
-      // Snippet with highlighting (diff-style header included)
-      const content = opts.full ? row.body : snippet;
-      const displayContent = opts.lineNumbers ? addLineNumbers(content, opts.full ? 1 : line) : content;
-      const highlighted = highlightTerms(displayContent, query);
-      console.log(highlighted);
-
-      // Double empty line between results
-      if (i < filtered.length - 1) console.log('\n');
-    }
-  } else if (opts.format === "md") {
-    for (let i = 0; i < filtered.length; i++) {
-      const row = filtered[i];
-      if (!row) continue;
-      const visiblePath = displayPathFor(row);
-      const heading = row.title || visiblePath;
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : undefined);
-      let content = opts.full ? row.body : extractSnippet(row.body, query, 500, row.chunkPos, row.chunkLen, opts.intent).snippet;
-      if (opts.lineNumbers) {
-        content = addLineNumbers(content);
-      }
-      const fileLine = `**file:** \`${visiblePath}\`\n`;
-      // With --full-path the on-disk path is the identifier; drop the docid line.
-      const docidLine = (docid && !opts.fullPath) ? `**docid:** \`#${docid}\`\n` : "";
-      const contextLine = row.context ? `**context:** ${row.context}\n` : "";
-      console.log(`---\n# ${heading}\n${fileLine}${docidLine}${contextLine}\n${content}\n`);
-    }
-  } else if (opts.format === "xml") {
-    for (const row of filtered) {
-      const titleAttr = row.title ? ` title="${row.title.replace(/"/g, '&quot;')}"` : "";
-      const contextAttr = row.context ? ` context="${row.context.replace(/"/g, '&quot;')}"` : "";
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : "");
-      let content = opts.full ? row.body : extractSnippet(row.body, query, 500, row.chunkPos, row.chunkLen, opts.intent).snippet;
-      if (opts.lineNumbers) {
-        content = addLineNumbers(content);
-      }
-      const docidAttr = opts.fullPath ? "" : ` docid="#${docid}"`;
-      console.log(`<file${docidAttr} name="${displayPathFor(row)}"${titleAttr}${contextAttr}>\n${content}\n</file>\n`);
-    }
-  } else {
-    // CSV format
-    const csvHeader = opts.fullPath
-      ? "score,file,title,context,line,snippet"
-      : "docid,score,file,title,context,line,snippet";
-    console.log(csvHeader);
-    for (const row of filtered) {
-      const { line, snippet } = extractSnippet(row.body, query, 500, row.chunkPos, row.chunkLen, opts.intent);
-      let content = opts.full ? row.body : snippet;
-      if (opts.lineNumbers) {
-        content = addLineNumbers(content, opts.full ? 1 : line);
-      }
-      const docid = row.docid || (row.hash ? row.hash.slice(0, 6) : "");
-      const snippetText = content || "";
-      const path = escapeCSV(displayPathFor(row));
-      const tail = `${path},${escapeCSV(row.title || "")},${escapeCSV(row.context || "")},${line},${escapeCSV(snippetText)}`;
-      if (opts.fullPath) {
-        console.log(`${row.score.toFixed(4)},${tail}`);
-      } else {
-        console.log(`#${docid},${row.score.toFixed(4)},${tail}`);
-      }
-    }
-  }
-}
-
 // Resolve -c collection filter: supports single string, array, or undefined.
 // Returns validated collection names (exits on unknown collection).
 function resolveCollectionFilter(raw: string | string[] | undefined, useDefaults: boolean = false): string[] {
@@ -2913,20 +2555,6 @@ function runSkillsCommand(args: string[], jsonMode: boolean, fullOption = false,
   }
 }
 
-function showSkillsHelp(): void {
-  console.log("Usage: qmd skills <list|get|path> [options]");
-  console.log("");
-  console.log("Commands:");
-  console.log("  list                 List bundled runtime skills");
-  console.log("  get <name>           Print a bundled runtime skill");
-  console.log("  get <name> --full    Include references/templates/scripts");
-  console.log("  get --all            Print all bundled runtime skills");
-  console.log("  path [name]          Print runtime skill directory path(s)");
-  console.log("");
-  console.log("Options:");
-  console.log("  --json               Print structured JSON");
-}
-
 function ensureClaudeSymlink(linkPath: string, targetDir: string, force: boolean): boolean {
   const parentDir = dirname(linkPath);
   if (pathExists(parentDir)) {
@@ -2998,113 +2626,6 @@ async function installSkill(globalInstall: boolean, force: boolean, autoYes: boo
   } else {
     console.log(`✓ Claude already sees the skill via ${dirname(claudeLinkPath)}`);
   }
-}
-
-function showHelp(): void {
-  console.log("qmd — Quick Markdown Search");
-  console.log("");
-  console.log("Usage:");
-  console.log("  qmd <command> [options]");
-  console.log("");
-  console.log("Primary commands:");
-  console.log("  qmd query <query>             - Hybrid search with auto expansion + reranking (recommended)");
-  console.log("  qmd query 'lex:..\\nvec:...'   - Structured query document (you provide lex/vec/hyde lines)");
-  console.log("  qmd search <query>            - Full-text BM25 keywords (no LLM)");
-  console.log("  qmd vsearch <query>           - Vector similarity only");
-  console.log("  qmd get <file>[:from[:count]] - Show a document (line-numbered; #docid in header)");
-  console.log("  qmd multi-get <pattern>       - Batch fetch via glob or comma-separated list");
-  console.log("  qmd skills list/get/path      - List and retrieve bundled runtime skills");
-  console.log("  qmd skill show/install        - Show or install the QMD skill");
-  console.log("  qmd mcp                       - Start the MCP server (stdio transport for AI agents)");
-  console.log("  qmd bench <fixture-or-dir>    - Run legacy or qrels search quality benchmarks");
-  console.log("");
-  console.log("Collections & context:");
-  console.log("  qmd collection add/list/remove/rename/show   - Manage indexed folders");
-  console.log("  qmd context add/list/rm                      - Attach human-written summaries");
-  console.log("  qmd ls [collection[/path]]                   - Inspect indexed files");
-  console.log("");
-  console.log("Maintenance:");
-  console.log("  qmd init                      - Create a project-local .qmd index");
-  console.log("  qmd status                    - View index + collection health");
-  console.log("  qmd update [--pull]           - Re-index collections (optionally git pull first)");
-  console.log("  qmd embed [-f] [-c <name>]    - Generate/refresh vector embeddings");
-  console.log("    --max-docs-per-batch <n>    - Cap docs loaded into memory per embedding batch");
-  console.log("    --max-batch-mb <n>          - Cap UTF-8 MB loaded into memory per embedding batch");
-  console.log("    --timeout <minutes>         - Embed session cap in minutes (0 = no limit; default 30)");
-  console.log("  qmd cleanup                   - Clear caches, vacuum DB");
-  console.log("");
-  console.log("Query syntax (qmd query):");
-  console.log("  QMD queries are either a single expand query (no prefix) or a multi-line");
-  console.log("  document where every line is typed with lex:, vec:, or hyde:. This grammar");
-  console.log("  matches the docs in docs/SYNTAX.md and is enforced in the CLI.");
-  console.log("");
-  const grammar = [
-    `query          = expand_query | query_document ;`,
-    `expand_query   = text | explicit_expand ;`,
-    `explicit_expand= "expand:" text ;`,
-    `query_document = [ intent_line ] { typed_line } ;`,
-    `intent_line    = "intent:" text newline ;`,
-    `typed_line     = type ":" text newline ;`,
-    `type           = "lex" | "vec" | "hyde" ;`,
-    `text           = quoted_phrase | plain_text ;`,
-    `quoted_phrase  = '"' { character } '"' ;`,
-    `plain_text     = { character } ;`,
-    `newline        = "\\n" ;`,
-  ];
-  console.log("  Grammar:");
-  for (const line of grammar) {
-    console.log(`    ${line}`);
-  }
-  console.log("");
-  console.log("  Examples:");
-  console.log("    qmd query \"how does auth work\"                # single-line → implicit expand");
-  console.log("    qmd query $'lex: CAP theorem\\nvec: consistency'  # typed query document");
-  console.log("    qmd query $'lex: \"exact matches\" sports -baseball'  # phrase + negation lex search");
-  console.log("    qmd query $'hyde: Hypothetical answer text'       # hyde-only document");
-  console.log("");
-  console.log("  Constraints:");
-  console.log("    - Standalone expand queries cannot mix with typed lines.");
-  console.log("    - Query documents allow only lex:, vec:, or hyde: prefixes.");
-  console.log("    - Each typed line must be single-line text with balanced quotes.");
-  console.log("");
-  console.log("AI agents & integrations:");
-  console.log("  - Run `qmd mcp` to expose the MCP server (stdio) to agents/IDEs.");
-  console.log("  - Run `qmd skills get qmd --full` for version-matched agent instructions.");
-  console.log("  - `qmd skill install` installs the QMD skill into ./.agents/skills/qmd.");
-  console.log("  - Use `qmd skill install --global` for ~/.agents/skills/qmd.");
-  console.log("  - `qmd --skill` is kept as an alias for `qmd skill show`.");
-  console.log("  - Advanced: `qmd mcp --http ...` and `qmd mcp --http --daemon` are optional for custom transports.");
-  console.log("");
-  console.log("Global options:");
-  console.log("  --index <name>             - Use a named index (default: index)");
-  console.log("  QMD_EDITOR_URI             - Editor link template for clickable TTY search output");
-  console.log("");
-  console.log("Search options:");
-  console.log("  -n <num>                   - Max results (default 5, or 20 for --format files|json)");
-  console.log("  --all                      - Return all matches (pair with --min-score)");
-  console.log("  --min-score <num>          - Minimum similarity score");
-  console.log("  --full                     - Output full document instead of snippet");
-  console.log("  -C, --candidate-limit <n>  - Max candidates to rerank (default 40, lower = faster)");
-  console.log("  --no-rerank                - Skip LLM reranking (use RRF scores only, much faster on CPU)");
-  console.log("  --no-gpu                   - Force CPU mode for llama.cpp operations (same as QMD_FORCE_CPU=1)");
-  console.log("  --line-numbers             - Include line numbers (search; get/multi-get are on by default)");
-  console.log("  --no-line-numbers          - Disable line numbers for get/multi-get");
-  console.log("  --full-path                - Show on-disk paths instead of qmd:// + docid (get/multi-get/search/query)");
-  console.log("                                Paths are ./-prefixed when under $PWD, absolute otherwise");
-  console.log("  --explain                  - Include retrieval score traces (query, CLI/--format json)");
-  console.log("  --format <kind>            - Output format: cli (default) | json | csv | md | xml | files");
-  console.log("  -c, --collection <name>    - Filter by one or more collections");
-  console.log("");
-  console.log("Embed/query options:");
-  console.log("  --chunk-strategy <auto|regex> - Chunking mode (default: regex; auto uses AST for code files)");
-  console.log("  --timeout <minutes>          - Embed session cap in minutes (0 = no limit; default 30)");
-  console.log("");
-  console.log("Multi-get options:");
-  console.log("  -l <num>                   - Maximum lines per file");
-  console.log("  --max-bytes <num>          - Skip files larger than N bytes (default 65536)");
-  console.log("  --format <kind>            - Same formats as search");
-  console.log("");
-  console.log(`Index: ${getDbPath()}`);
 }
 
 function doctorCheck(label: string, ok: boolean, details: string): void {
@@ -3667,41 +3188,10 @@ async function showDoctor(): Promise<void> {
   closeDb();
 }
 
-function printDoctorHint(): void {
-  console.error("If qmd still behaves unexpectedly, run 'qmd doctor' for diagnostics.");
-}
-
 function exitWithError(error: unknown, code = 1): never {
   console.error(error instanceof Error ? error.message : String(error));
   printDoctorHint();
   process.exit(code);
-}
-
-type PackageJson = {
-  version: string;
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-};
-
-function readPackageJson(): PackageJson {
-  const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const pkgPath = resolve(scriptDir, "..", "..", "package.json");
-  return JSON.parse(readFileSync(pkgPath, "utf-8"));
-}
-
-async function showVersion(): Promise<void> {
-  const scriptDir = dirname(fileURLToPath(import.meta.url));
-  const pkg = readPackageJson();
-
-  let commit = "";
-  try {
-    commit = execSync(`git -C ${scriptDir} rev-parse --short HEAD`, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-  } catch {
-    // Not a git repo or git not available
-  }
-
-  const versionStr = commit ? `${pkg.version} (${commit})` : pkg.version;
-  console.log(`qmd ${versionStr}`);
 }
 
 // Main CLI - only run if this is the main module
