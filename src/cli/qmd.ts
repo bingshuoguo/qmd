@@ -78,6 +78,9 @@ import {
 import {
   showHelp,
   showSkillsHelp,
+  showSkillHelp,
+  showCollectionHelp,
+  printContextUsage,
   printDoctorHint,
   showVersion,
 } from "./help.js";
@@ -361,16 +364,7 @@ if (isMain) {
   }
 
   if (cli.values.help && cli.command === "skill") {
-    console.log("Usage: qmd skill <show|install> [options]");
-    console.log("");
-    console.log("Commands:");
-    console.log("  show                 Print the QMD skill");
-    console.log("  install              Install QMD skill into ./.agents/skills/qmd");
-    console.log("");
-    console.log("Options:");
-    console.log("  --global             Install into ~/.agents/skills/qmd");
-    console.log("  --yes                Also create the .claude/skills/qmd symlink");
-    console.log("  -f, --force          Replace existing install or symlink");
+    showSkillHelp();
     process.exit(0);
   }
 
@@ -383,13 +377,7 @@ if (isMain) {
     case "context": {
       const subcommand = cli.args[0];
       if (!subcommand) {
-        console.error("Usage: qmd context <add|list|rm>");
-        console.error("");
-        console.error("Commands:");
-        console.error("  qmd context add [path] \"text\"  - Add context (defaults to current dir)");
-        console.error("  qmd context add / \"text\"       - Add global context to all collections");
-        console.error("  qmd context list                - List all contexts");
-        console.error("  qmd context rm <path>           - Remove context");
+        printContextUsage();
         process.exit(1);
       }
 
@@ -603,22 +591,7 @@ if (isMain) {
 
         case "help":
         case undefined: {
-          console.log("Usage: qmd collection <command> [options]");
-          console.log("");
-          console.log("Commands:");
-          console.log("  list                      List all collections");
-          console.log("  add <path> [--name NAME]  Add a collection");
-          console.log("  remove <name>             Remove a collection");
-          console.log("  rename <old> <new>        Rename a collection");
-          console.log("  show <name>               Show collection details");
-          console.log("  update-cmd <name> [cmd]   Set pre-update command (e.g., 'git pull')");
-          console.log("  include <name>            Include in default queries");
-          console.log("  exclude <name>            Exclude from default queries");
-          console.log("");
-          console.log("Examples:");
-          console.log("  qmd collection add ~/notes --name notes");
-          console.log("  qmd collection update-cmd brain 'git pull'");
-          console.log("  qmd collection exclude archive");
+          showCollectionHelp();
           process.exit(0);
         }
 
@@ -917,16 +890,7 @@ if (isMain) {
 
         case "help":
         case undefined: {
-          console.log("Usage: qmd skill <show|install> [options]");
-          console.log("");
-          console.log("Commands:");
-          console.log("  show                 Print the QMD skill");
-          console.log("  install              Install QMD skill into ./.agents/skills/qmd");
-          console.log("");
-          console.log("Options:");
-          console.log("  --global             Install into ~/.agents/skills/qmd");
-          console.log("  --yes                Also create the .claude/skills/qmd symlink");
-          console.log("  -f, --force          Replace existing install or symlink");
+          showSkillHelp();
           process.exit(0);
         }
 
