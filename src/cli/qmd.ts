@@ -1,10 +1,8 @@
-import { openDatabase } from "../db.js";
-import type { Database } from "../db.js";
 import { spawn as nodeSpawn } from "child_process";
 import { fileURLToPath } from "url";
-import { basename, dirname, join as pathJoin, relative as relativePath, resolve as pathResolve } from "path";
+import { dirname, join as pathJoin } from "path";
 import { parseArgs } from "util";
-import { readFileSync, readdirSync, realpathSync, statSync, existsSync, unlinkSync, writeFileSync, openSync, closeSync, mkdirSync } from "fs";
+import { readFileSync, realpathSync, existsSync, unlinkSync, writeFileSync, openSync, closeSync, mkdirSync } from "fs";
 import {
   getPwd,
   getRealPath,
@@ -15,42 +13,21 @@ import {
   removeCollection,
   renameCollection,
   findSimilarFiles,
-  clearAllEmbeddings,
-  insertEmbedding,
-  getStatus,
-  extractTitle,
-  getCacheKey,
-  getCachedResult,
-  setCachedResult,
-  parseVirtualPath,
-  resolveVirtualPath,
-  toVirtualPath,
-  findActiveDocument,
   deleteLLMCache,
   deleteInactiveDocuments,
   cleanupOrphanedVectors,
   vacuumDatabase,
-  getCollectionsWithoutContext,
-  getTopLevelPathsWithoutContext,
-  handelize,
   DEFAULT_GLOB,
   DEFAULT_MULTI_GET_MAX_BYTES,
   createStore,
-  type ReindexResult,
-  type ChunkStrategy,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, pullModels, DEFAULT_MODEL_CACHE_DIR, resolveEmbedModel, resolveGenerateModel, resolveRerankModel } from "../llm.js";
+import { disposeDefaultLlamaCpp, pullModels, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
   type OutputFormat,
 } from "./formatter.js";
 import {
-  getCollection as getCollectionFromYaml,
-  listCollections as yamlListCollections,
-  removeCollection as yamlRemoveCollectionFn,
-  renameCollection as yamlRenameCollectionFn,
-  listAllContexts,
   setConfigIndexName,
   setConfigSource,
   findLocalConfigPath,

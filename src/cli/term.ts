@@ -124,7 +124,6 @@ function shortPath(dirpath: string): string {
 }
 
 export {
-  useColor,
   c,
   cursor,
   isTTY,
@@ -137,5 +136,4 @@ export {
   highlightTerms,
   formatScore,
   formatExplainNumber,
-  shortPath,
 };
