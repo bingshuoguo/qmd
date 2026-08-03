@@ -42,6 +42,7 @@ import {
   ensureModelsConfiguredForCli,
 } from "../context.js";
 import { c, formatTimeAgo } from "../term.js";
+import { indexFiles } from "./indexing.js";
 
 function sameDirectory(a: string, b: string): boolean {
   try {
@@ -311,6 +312,46 @@ function collectionList(): void {
   closeDb();
 }
 
+async function collectionAdd(pwd: string, globPattern: string, name?: string): Promise<void> {
+  // If name not provided, generate from pwd basename
+  let collName = name;
+  if (!collName) {
+    const parts = pwd.split('/').filter(Boolean);
+    collName = parts[parts.length - 1] || 'root';
+  }
+
+  // Check if collection with this name already exists in YAML
+  const existing = getCollectionFromYaml(collName);
+  if (existing) {
+    console.error(`${c.yellow}Collection '${collName}' already exists.${c.reset}`);
+    console.error(`Use a different name with --name <name>`);
+    process.exit(1);
+  }
+
+  // Check if a collection with this pwd+glob already exists in YAML
+  const allCollections = yamlListCollections();
+  const existingPwdGlob = allCollections.find(c => c.path === pwd && c.pattern === globPattern);
+
+  if (existingPwdGlob) {
+    console.error(`${c.yellow}A collection already exists for this path and pattern:${c.reset}`);
+    console.error(`  Name: ${existingPwdGlob.name} (qmd://${existingPwdGlob.name}/)`);
+    console.error(`  Pattern: ${globPattern}`);
+    console.error(`\nUse 'qmd update' to re-index it, or remove it first with 'qmd collection remove ${existingPwdGlob.name}'`);
+    process.exit(1);
+  }
+
+  // Add to YAML config + sync to SQLite
+  const { addCollection } = await import("../../collections.js");
+  addCollection(collName, pwd, globPattern);
+  resyncConfig();
+
+  // Create the collection and index files
+  console.log(`Creating collection '${collName}'...`);
+  const newColl = getCollectionFromYaml(collName);
+  await indexFiles(pwd, globPattern, collName, false, newColl?.ignore);
+  console.log(`${c.green}✓${c.reset} Collection '${collName}' created successfully`);
+}
+
 function collectionRemove(name: string): void {
   // Check if collection exists in YAML
   const coll = getCollectionFromYaml(name);
@@ -366,6 +407,7 @@ export {
   contextList,
   contextRemove,
   collectionList,
+  collectionAdd,
   collectionRemove,
   collectionRename,
 };
