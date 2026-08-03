@@ -131,6 +131,48 @@ function showSkillsHelp(): void {
   console.log("  --json               Print structured JSON");
 }
 
+function showSkillHelp(): void {
+  console.log("Usage: qmd skill <show|install> [options]");
+  console.log("");
+  console.log("Commands:");
+  console.log("  show                 Print the QMD skill");
+  console.log("  install              Install QMD skill into ./.agents/skills/qmd");
+  console.log("");
+  console.log("Options:");
+  console.log("  --global             Install into ~/.agents/skills/qmd");
+  console.log("  --yes                Also create the .claude/skills/qmd symlink");
+  console.log("  -f, --force          Replace existing install or symlink");
+}
+
+function showCollectionHelp(): void {
+  console.log("Usage: qmd collection <command> [options]");
+  console.log("");
+  console.log("Commands:");
+  console.log("  list                      List all collections");
+  console.log("  add <path> [--name NAME]  Add a collection");
+  console.log("  remove <name>             Remove a collection");
+  console.log("  rename <old> <new>        Rename a collection");
+  console.log("  show <name>               Show collection details");
+  console.log("  update-cmd <name> [cmd]   Set pre-update command (e.g., 'git pull')");
+  console.log("  include <name>            Include in default queries");
+  console.log("  exclude <name>            Exclude from default queries");
+  console.log("");
+  console.log("Examples:");
+  console.log("  qmd collection add ~/notes --name notes");
+  console.log("  qmd collection update-cmd brain 'git pull'");
+  console.log("  qmd collection exclude archive");
+}
+
+function printContextUsage(): void {
+  console.error("Usage: qmd context <add|list|rm>");
+  console.error("");
+  console.error("Commands:");
+  console.error("  qmd context add [path] \"text\"  - Add context (defaults to current dir)");
+  console.error("  qmd context add / \"text\"       - Add global context to all collections");
+  console.error("  qmd context list                - List all contexts");
+  console.error("  qmd context rm <path>           - Remove context");
+}
+
 function printDoctorHint(): void {
   console.error("If qmd still behaves unexpectedly, run 'qmd doctor' for diagnostics.");
 }
@@ -165,6 +207,9 @@ async function showVersion(): Promise<void> {
 export {
   showHelp,
   showSkillsHelp,
+  showSkillHelp,
+  showCollectionHelp,
+  printContextUsage,
   printDoctorHint,
   type PackageJson,
   readPackageJson,

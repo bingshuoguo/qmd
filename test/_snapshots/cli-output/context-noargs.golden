@@ -1,0 +1,10 @@
+exit: 1
+--- stderr ---
+Usage: qmd context <add|list|rm>
+
+Commands:
+  qmd context add [path] "text"  - Add context (defaults to current dir)
+  qmd context add / "text"       - Add global context to all collections
+  qmd context list                - List all contexts
+  qmd context rm <path>           - Remove context
+--- stdout ---
