@@ -1,0 +1,19 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+Usage: qmd collection <command> [options]
+
+Commands:
+  list                      List all collections
+  add <path> [--name NAME]  Add a collection
+  remove <name>             Remove a collection
+  rename <old> <new>        Rename a collection
+  show <name>               Show collection details
+  update-cmd <name> [cmd]   Set pre-update command (e.g., 'git pull')
+  include <name>            Include in default queries
+  exclude <name>            Exclude from default queries
+
+Examples:
+  qmd collection add ~/notes --name notes
+  qmd collection update-cmd brain 'git pull'
+  qmd collection exclude archive
