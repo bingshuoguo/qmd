@@ -1,0 +1,4 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+#433665,0.49,qmd://snap/notes/meeting.md,"Snapshot fixture collection"

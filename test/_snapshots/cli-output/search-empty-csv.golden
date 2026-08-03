@@ -1,0 +1,4 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+docid,score,file,title,context,line,snippet
