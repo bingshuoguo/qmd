@@ -1,0 +1,4 @@
+exit: 1
+--- stderr ---
+Document not found: qmd://snap/nope.md
+--- stdout ---

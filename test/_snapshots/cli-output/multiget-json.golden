@@ -1,0 +1,19 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+[
+  {
+    "file": "notes/ideas.md",
+    "docid": "#c2496c",
+    "title": "Idea Parking Lot",
+    "context": "Snapshot fixture collection",
+    "body": "1: # Idea Parking Lot\n2: \n3: ## Ideas\n4: - Keyboard-first navigation\n5: - Export snapshots to PDF\n6: "
+  },
+  {
+    "file": "notes/meeting.md",
+    "docid": "#433665",
+    "title": "Weekly Sync Meeting",
+    "context": "Snapshot fixture collection",
+    "body": "1: # Weekly Sync Meeting\n2: \n3: Date: 2024-01-15\n4: \n5: ## Attendees\n6: - Alice\n7: - Bob\n8: \n9: ## Notes\n10: - Reviewed the meeting agenda\n11: - Bob owns the follow-up\n12: "
+  }
+]
