@@ -1,0 +1,22 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+docid,file,title,context,skipped,body
+#c2496c,notes/ideas.md,Idea Parking Lot,Snapshot fixture collection,false,"1: # Idea Parking Lot
+2: 
+3: ## Ideas
+4: - Keyboard-first navigation
+5: - Export snapshots to PDF
+6: "
+#433665,notes/meeting.md,Weekly Sync Meeting,Snapshot fixture collection,false,"1: # Weekly Sync Meeting
+2: 
+3: Date: 2024-01-15
+4: 
+5: ## Attendees
+6: - Alice
+7: - Bob
+8: 
+9: ## Notes
+10: - Reviewed the meeting agenda
+11: - Bob owns the follow-up
+12: "

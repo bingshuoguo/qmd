@@ -1,0 +1,14 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+[
+  {
+    "docid": "#433665",
+    "score": 0.49,
+    "file": "qmd://snap/notes/meeting.md",
+    "line": 1,
+    "title": "Weekly Sync Meeting",
+    "context": "Snapshot fixture collection",
+    "snippet": "@@ -1,3 @@ (0 before, 9 after)\n# Weekly Sync Meeting\n\nDate: 2024-01-15"
+  }
+]

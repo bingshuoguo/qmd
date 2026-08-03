@@ -1,0 +1,10 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+qmd://snap/README.md  #9cce09
+Folder Context: Snapshot fixture collection
+---
+
+2: 
+3: Root document for the snapshot collection.
+4: 
