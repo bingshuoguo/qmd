@@ -1,0 +1,19 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+qmd://snap/notes/meeting.md  #433665
+Folder Context: Snapshot fixture collection
+---
+
+1: # Weekly Sync Meeting
+2: 
+3: Date: 2024-01-15
+4: 
+5: ## Attendees
+6: - Alice
+7: - Bob
+8: 
+9: ## Notes
+10: - Reviewed the meeting agenda
+11: - Bob owns the follow-up
+12: 

@@ -7,20 +7,7 @@
 
 import { describe, test, expect } from "vitest";
 import { parseArgs } from "node:util";
-
-// Reproduce the filterByCollections logic from qmd.ts for testing
-// (the function is private in qmd.ts)
-function filterByCollections<T extends { filepath?: string; file?: string }>(
-  results: T[],
-  collectionNames: string[],
-): T[] {
-  if (collectionNames.length <= 1) return results;
-  const prefixes = collectionNames.map((n) => `qmd://${n}/`);
-  return results.filter((r) => {
-    const path = r.filepath || r.file || "";
-    return prefixes.some((p) => path.startsWith(p));
-  });
-}
+import { filterByCollections } from "../src/cli/commands/search.js";
 
 describe("filterByCollections", () => {
   const results = [

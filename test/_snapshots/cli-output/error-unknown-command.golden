@@ -1,0 +1,6 @@
+exit: 1
+--- stderr ---
+Unknown command: frobnicate
+Run 'qmd --help' for usage.
+If qmd still behaves unexpectedly, run 'qmd doctor' for diagnostics.
+--- stdout ---

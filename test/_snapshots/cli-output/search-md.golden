@@ -1,0 +1,14 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+---
+# Weekly Sync Meeting
+**file:** `qmd://snap/notes/meeting.md`
+**docid:** `#433665`
+**context:** Snapshot fixture collection
+
+@@ -1,3 @@ (0 before, 9 after)
+# Weekly Sync Meeting
+
+Date: 2024-01-15
+
