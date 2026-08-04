@@ -1,0 +1,34 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+<?xml version="1.0" encoding="UTF-8"?>
+<documents>
+  <document docid="#c2496c">
+    <file>notes/ideas.md</file>
+    <title>Idea Parking Lot</title>
+    <context>Snapshot fixture collection</context>
+    <body>1: # Idea Parking Lot
+2: 
+3: ## Ideas
+4: - Keyboard-first navigation
+5: - Export snapshots to PDF
+6: </body>
+  </document>
+  <document docid="#433665">
+    <file>notes/meeting.md</file>
+    <title>Weekly Sync Meeting</title>
+    <context>Snapshot fixture collection</context>
+    <body>1: # Weekly Sync Meeting
+2: 
+3: Date: 2024-01-15
+4: 
+5: ## Attendees
+6: - Alice
+7: - Bob
+8: 
+9: ## Notes
+10: - Reviewed the meeting agenda
+11: - Bob owns the follow-up
+12: </body>
+  </document>
+</documents>

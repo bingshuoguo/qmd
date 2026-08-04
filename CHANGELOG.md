@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Internal
+
+- Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`
+  (`context`, `term`, `output`, `help`, and `commands/{docs,search,indexing,
+  collections,doctor,skills}`) with zero user-visible behavior change: every
+  function moved verbatim, CLI output verified byte-identical by a new
+  golden-file snapshot suite (`test/cli-output-snapshot.test.ts`, 35 cases
+  across all 6 output formats). Two test suites that kept silent copies of
+  CLI internals (`filterByCollections`, `parseStructuredQuery`) now import
+  the real implementations from `src/cli/commands/search.js`.
+
 ## [2.6.3] - 2026-06-24
 
 ### Added

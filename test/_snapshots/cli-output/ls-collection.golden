@@ -1,0 +1,6 @@
+exit: 0
+--- stderr ---
+--- stdout ---
+178 B  Jan 15  2024  qmd://snap/README.md
+ 83 B  Jan 15  2024  qmd://snap/notes/ideas.md
+133 B  Jan 15  2024  qmd://snap/notes/meeting.md
