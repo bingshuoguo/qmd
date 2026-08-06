@@ -45,7 +45,7 @@ export function parseGeneratedExpansion(
   if (parsed.diagnostics[0]?.code === "RUNTIME_EMPTY_OUTPUT") {
     return formatError(rawOutput, "model returned empty output");
   }
-  if (!parsed.canonicalSyntax || parsed.diagnostics.length > 0) {
+  if (parsed.diagnostics.length > 0) {
     const line = parsed.diagnostics[0]?.line ?? 1;
     return formatError(rawOutput, `line ${line} is not a typed expansion`);
   }

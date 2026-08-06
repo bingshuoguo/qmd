@@ -1,10 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  filterGeneratedExpansionsForQuery,
-  parseGeneratedExpansionLines,
-} from "../src/query-expansion-parser.js";
+import { parseGeneratedExpansionLines } from "../src/query-expansion-parser.js";
 import { parseProductionExpansion } from "../src/llm.js";
 
 type Fixture = {
@@ -35,27 +32,32 @@ describe("generated expansion line parser", () => {
           line: 2,
           text: "not a typed line",
         }],
-        canonicalSyntax: false,
       });
   });
 
   test("recognizes canonical syntax without imposing it on runtime", () => {
     expect(parseGeneratedExpansionLines("lex:auth")).toEqual({
       output: [["lex", "auth"]],
-      diagnostics: [],
-      canonicalSyntax: false,
+      diagnostics: [{
+        code: "RUNTIME_INVALID_LINE",
+        line: 1,
+        text: "lex:auth",
+      }],
     });
   });
 
-  test("diagnoses empty text without changing legacy production parsing", () => {
+  test("drops empty text and falls back when no usable line remains", () => {
     expect(parseGeneratedExpansionLines("lex:")).toEqual({
-      output: [["lex", ""]],
+      output: [],
       diagnostics: [{ code: "RUNTIME_EMPTY_TEXT", line: 1, text: "lex:" }],
-      canonicalSyntax: false,
     });
     expect(parseProductionExpansion("内存管理", "lex:")).toEqual({
-      output: [{ type: "lex", text: "" }],
-      fallbackUsed: false,
+      output: [
+        { type: "hyde", text: "Information about 内存管理" },
+        { type: "lex", text: "内存管理" },
+        { type: "vec", text: "内存管理" },
+      ],
+      fallbackUsed: true,
     });
   });
 
@@ -73,12 +75,6 @@ describe("generated expansion line parser", () => {
       ],
       fallbackUsed: true,
     });
-  });
-
-  test("keeps the deprecated overlap helper as an identity for compatibility", () => {
-    expect(filterGeneratedExpansionsForQuery("videography tips", [
-      ["lex", "video production"],
-    ])).toEqual([["lex", "video production"]]);
   });
 
   test("matches runtime expectations in shared fixtures", () => {
