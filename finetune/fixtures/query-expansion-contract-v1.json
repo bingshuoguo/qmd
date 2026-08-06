@@ -1,0 +1,453 @@
+{
+  "fixture_version": "query-expansion-contract-v1",
+  "tokenizer": {
+    "model": "Qwen/Qwen3-1.7B",
+    "revision": "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+  },
+  "cases": [
+    {
+      "name": "valid-without-hyde",
+      "query": "auth config",
+      "intent": "configure authentication",
+      "input_key": "cd46625bd8a346ba4cfd519c548c811de433dd3580bdd1a96495d1c5dfc0ed70",
+      "training_record": {
+        "output": [
+          ["lex", "authentication configuration"],
+          ["vec", "how to configure authentication"]
+        ]
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": [],
+        "canonical_output": [
+          ["lex", "authentication configuration"],
+          ["vec", "how to configure authentication"]
+        ]
+      }
+    },
+    {
+      "name": "canonicalizes-type-order",
+      "query": "auth config",
+      "training_record": {
+        "output": [
+          ["vec", "auth config semantic guide"],
+          ["lex", "auth configuration"],
+          ["hyde", "  auth config reference material  "]
+        ]
+      },
+      "token_counts": {
+        "auth config reference material": 32
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": [],
+        "canonical_output": [
+          ["hyde", "auth config reference material"],
+          ["lex", "auth configuration"],
+          ["vec", "auth config semantic guide"]
+        ]
+      }
+    },
+    {
+      "name": "empty-query",
+      "query": "  ",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_EMPTY_QUERY"]
+      }
+    },
+    {
+      "name": "multiline-query",
+      "query": "auth\nconfig",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MULTILINE_QUERY"]
+      }
+    },
+    {
+      "name": "empty-intent",
+      "query": "auth",
+      "intent": "  ",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_EMPTY_INTENT"]
+      }
+    },
+    {
+      "name": "multiline-intent",
+      "query": "auth",
+      "intent": "setup\r\nproduction",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MULTILINE_INTENT"]
+      }
+    },
+    {
+      "name": "empty-output",
+      "query": "auth",
+      "training_record": {"output": []},
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_EMPTY_OUTPUT", "TRAIN_MISSING_LEX", "TRAIN_MISSING_VEC"]
+      }
+    },
+    {
+      "name": "empty-output-text",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "  "], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_EMPTY_OUTPUT_TEXT", "TRAIN_MISSING_LEX"]
+      }
+    },
+    {
+      "name": "invalid-output-type",
+      "query": "auth",
+      "training_record": {
+        "output": [["keyword", "auth"], ["lex", "auth"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_INVALID_OUTPUT_TYPE"]
+      }
+    },
+    {
+      "name": "missing-vec",
+      "query": "auth",
+      "training_record": {"output": [["lex", "authentication"]]},
+      "raw_model_output": "lex: authentication",
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MISSING_VEC"]
+      },
+      "runtime": {
+        "output": [["lex", "authentication"]],
+        "fallback": false
+      },
+      "benchmark": {
+        "status": "ok",
+        "output": [["lex", "authentication"]],
+        "fallback": false
+      },
+      "structured_query": {"type": "lex", "text": "authentication", "valid": true}
+    },
+    {
+      "name": "missing-lex",
+      "query": "auth",
+      "training_record": {"output": [["vec", "authentication guide"]]},
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MISSING_LEX"]
+      },
+      "structured_query": {"type": "vec", "text": "authentication guide", "valid": true}
+    },
+    {
+      "name": "too-many-lex",
+      "query": "auth",
+      "training_record": {
+        "output": [
+          ["lex", "auth one"], ["lex", "auth two"],
+          ["lex", "auth three"], ["lex", "auth four"],
+          ["vec", "authentication guide"]
+        ]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_TOO_MANY_LEX"]
+      }
+    },
+    {
+      "name": "too-many-vec",
+      "query": "auth",
+      "training_record": {
+        "output": [
+          ["lex", "auth"],
+          ["vec", "auth guide one"], ["vec", "auth guide two"],
+          ["vec", "auth guide three"], ["vec", "auth guide four"]
+        ]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_TOO_MANY_VEC"]
+      }
+    },
+    {
+      "name": "too-many-hyde",
+      "query": "auth",
+      "training_record": {
+        "output": [
+          ["hyde", "auth document one"], ["hyde", "auth document two"],
+          ["lex", "auth"], ["vec", "authentication guide"]
+        ]
+      },
+      "token_counts": {"auth document one": 32, "auth document two": 32},
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_TOO_MANY_HYDE"]
+      }
+    },
+    {
+      "name": "duplicate-output-after-comparison-normalization",
+      "query": "auth",
+      "training_record": {
+        "output": [
+          ["lex", "AUTH   config"], ["lex", "auth config"],
+          ["vec", "authentication guide"]
+        ]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_DUPLICATE_OUTPUT"]
+      }
+    },
+    {
+      "name": "multiline-output",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "auth\nconfig"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MULTILINE_OUTPUT"]
+      }
+    },
+    {
+      "name": "chat-template-leak",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "<|im_start|>assistant auth guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_CHAT_TEMPLATE_LEAK"]
+      }
+    },
+    {
+      "name": "control-character",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "auth\tguide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_CONTROL_CHARACTER"]
+      }
+    },
+    {
+      "name": "lex-unmatched-quote",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "\"auth config"], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_LEX_UNMATCHED_QUOTE"]
+      }
+    },
+    {
+      "name": "lex-only-negation",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "-legacy -\"old auth\""], ["vec", "authentication guide"]]
+      },
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_LEX_NO_POSITIVE_TERM"]
+      }
+    },
+    {
+      "name": "valid-lex-negation",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "auth -legacy -\"old setup\""], ["vec", "how to configure authentication setup"]]
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": [],
+        "canonical_output": [["lex", "auth -legacy -\"old setup\""], ["vec", "how to configure authentication setup"]]
+      }
+    },
+    {
+      "name": "vec-command-flag-is-natural-language",
+      "query": "auth",
+      "training_record": {
+        "output": [["lex", "auth"], ["vec", "configure SSH -L port forwarding for authentication"]]
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": []
+      }
+    },
+    {
+      "name": "hyde-command-and-math-syntax-are-document-content",
+      "query": "Kubernetes deployment",
+      "training_record": {
+        "output": [["hyde", "Run kubectl apply -f deployment.yaml, then inspect pod status. A model can also contain dS/dt = -βSI when documenting a differential equation."], ["lex", "Kubernetes deployment"], ["vec", "how to deploy Kubernetes resources from a YAML manifest"]]
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": []
+      }
+    },
+    {
+      "name": "hyde-at-token-limit",
+      "query": "auth",
+      "training_record": {
+        "output": [["hyde", "auth boundary document"], ["lex", "auth"], ["vec", "how to configure authentication"]]
+      },
+      "token_counts": {"auth boundary document": 128},
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": [],
+        "canonical_output": [["hyde", "auth boundary document"], ["lex", "auth"], ["vec", "how to configure authentication"]]
+      },
+      "structured_query": {"type": "hyde", "text": "auth boundary document", "valid": true}
+    },
+    {
+      "name": "hyde-over-token-limit",
+      "query": "auth",
+      "training_record": {
+        "output": [["hyde", "auth oversized document"], ["lex", "auth"], ["vec", "how to configure authentication"]]
+      },
+      "token_counts": {"auth oversized document": 129},
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_HYDE_TOO_LONG"]
+      }
+    },
+    {
+      "name": "hyde-short-warning",
+      "query": "auth",
+      "training_record": {
+        "output": [["hyde", "auth short document"], ["lex", "auth"], ["vec", "how to configure authentication"]]
+      },
+      "token_counts": {"auth short document": 31},
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": ["WARN_HYDE_TOO_SHORT"]
+      }
+    },
+    {
+      "name": "new-only-mode-quarantined",
+      "query": "auth /only:lex",
+      "training_record": {"output": [["lex", "auth"]]},
+      "training": {
+        "valid": false,
+        "quarantined": true,
+        "errors": ["TRAIN_ONLY_MODE"]
+      }
+    },
+    {
+      "name": "legacy-only-mode-quarantined",
+      "query": "auth only: vec",
+      "training_record": {"output": [["vec", "authentication guide"]]},
+      "training": {
+        "valid": false,
+        "quarantined": true,
+        "errors": ["TRAIN_ONLY_MODE"]
+      }
+    },
+    {
+      "name": "runtime-partial-success",
+      "query": "auth",
+      "training_record": {"output": [["lex", "auth"]]},
+      "raw_model_output": "lex: auth\nnot a typed line",
+      "training": {
+        "valid": false,
+        "quarantined": false,
+        "errors": ["TRAIN_MISSING_VEC"]
+      },
+      "runtime": {
+        "output": [["lex", "auth"]],
+        "fallback": false
+      },
+      "benchmark": {
+        "status": "format_error",
+        "output": [],
+        "fallback": false
+      }
+    },
+    {
+      "name": "runtime-synonym-expansion-without-literal-overlap",
+      "query": "videography tips",
+      "training_record": {"output": [["lex", "video production shooting composition stabilization"], ["vec", "how to shoot better video with camera movement, lighting, and composition techniques"]]},
+      "raw_model_output": "lex: video production shooting composition stabilization\nvec: how to shoot better video with camera movement, lighting, and composition techniques",
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": []
+      },
+      "runtime": {
+        "output": [["lex", "video production shooting composition stabilization"], ["vec", "how to shoot better video with camera movement, lighting, and composition techniques"]],
+        "fallback": false
+      },
+      "benchmark": {
+        "status": "ok",
+        "output": [["lex", "video production shooting composition stabilization"], ["vec", "how to shoot better video with camera movement, lighting, and composition techniques"]],
+        "fallback": false
+      }
+    },
+    {
+      "name": "unicode-case-and-punctuation",
+      "query": "C++ 内存管理",
+      "intent": "比较 Bob 的方案",
+      "input_key": "4f78f1512c685e4874036234ab491d46f308161bf31c1f96c483e4ee8d1afd5b",
+      "training_record": {
+        "output": [["lex", "\"C++\" 内存 Bob"], ["vec", "Bob 的 C++ 内存管理方案"]]
+      },
+      "training": {
+        "valid": true,
+        "quarantined": false,
+        "errors": [],
+        "warnings": [],
+        "canonical_output": [["lex", "\"C++\" 内存 Bob"], ["vec", "Bob 的 C++ 内存管理方案"]]
+      }
+    }
+  ]
+}
