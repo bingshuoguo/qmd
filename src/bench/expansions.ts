@@ -18,6 +18,9 @@ import type {
   ExpansionStatus,
 } from "./types.js";
 import { validateBenchmarkRunName } from "./run-name.js";
+import {
+  parseGeneratedExpansionLines,
+} from "../query-expansion-parser.js";
 
 type ParsedGeneratedExpansion = Pick<
   BenchmarkExpansionRecord,
@@ -35,55 +38,23 @@ function formatError(rawOutput: string, error: string): ParsedGeneratedExpansion
 }
 
 export function parseGeneratedExpansion(
-  query: string,
+  _query: string,
   rawOutput: string,
 ): ParsedGeneratedExpansion {
-  const trimmed = rawOutput.trim();
-  if (trimmed.length === 0) return formatError(rawOutput, "model returned empty output");
-
-  const parsed: BenchmarkExpansion[] = [];
-  const lines = trimmed.split("\n");
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]!.replace(/\r$/, "");
-    const match = /^(lex|vec|hyde): ([^\r\n]+)$/.exec(line);
-    if (!match) {
-      return formatError(rawOutput, `line ${index + 1} is not a typed expansion`);
-    }
-    const text = match[2]!.trim();
-    if (text.length === 0) {
-      return formatError(rawOutput, `line ${index + 1} has empty expansion text`);
-    }
-    parsed.push([match[1] as BenchmarkExpansion[0], text]);
+  const parsed = parseGeneratedExpansionLines(rawOutput);
+  if (parsed.diagnostics[0]?.code === "RUNTIME_EMPTY_OUTPUT") {
+    return formatError(rawOutput, "model returned empty output");
   }
-
-  const queryTerms = query.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
-  const usable = parsed.filter(([, text]) => {
-    if (queryTerms.length === 0) return true;
-    const lower = text.toLowerCase();
-    return queryTerms.some(term => lower.includes(term));
-  });
-  if (usable.length > 0) {
-    return {
-      status: "ok",
-      raw_output: rawOutput,
-      output: usable,
-      fallback_used: false,
-      error: null,
-    };
+  if (!parsed.canonicalSyntax || parsed.diagnostics.length > 0) {
+    const line = parsed.diagnostics[0]?.line ?? 1;
+    return formatError(rawOutput, `line ${line} is not a typed expansion`);
   }
 
   return {
     status: "ok",
     raw_output: rawOutput,
-    output: [
-      ["hyde", `Information about ${query}`],
-      ["lex", query],
-      ["vec", query],
-    ],
-    fallback_used: true,
+    output: parsed.output as BenchmarkExpansion[],
+    fallback_used: false,
     error: null,
   };
 }

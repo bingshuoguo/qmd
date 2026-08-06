@@ -31,6 +31,7 @@ import {
   type RerankDocument,
   type ILLMSession,
 } from "./llm.js";
+import { GENERATED_OUTPUT_PARSER_VERSION } from "./query-expansion-parser.js";
 import type {
   NamedCollection,
   Collection,
@@ -4105,7 +4106,12 @@ function removeIncompleteEmbeddings(db: Database, expectedChunksByHash: Map<stri
 
 export async function expandQuery(query: string, model: string = DEFAULT_QUERY_MODEL, db: Database, intent?: string, llmOverride?: LlamaCpp): Promise<ExpandedQuery[]> {
   // Check cache first — stored as JSON preserving types
-  const cacheKey = getCacheKey("expandQuery", { query, model, ...(intent && { intent }) });
+  const cacheKey = getCacheKey("expandQuery", {
+    query,
+    model,
+    parserVersion: GENERATED_OUTPUT_PARSER_VERSION,
+    ...(intent && { intent }),
+  });
   const cached = getCachedResult(db, cacheKey);
   if (cached) {
     try {
