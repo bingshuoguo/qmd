@@ -17,9 +17,11 @@ data lives in data/*.jsonl and is always loaded through the schema.
 """
 
 import argparse
+import glob
 import json
 import random
 import os
+import sys
 from pathlib import Path
 
 from dataset.schema import (
@@ -42,6 +44,24 @@ def get_tokenizer():
         _tokenizer = AutoTokenizer.from_pretrained(model_name)
         _tokenizer_model = model_name
     return _tokenizer
+
+
+def get_token_counter():
+    """Return a Contract v1 token counter backed by the real Qwen tokenizer."""
+    tokenizer = get_tokenizer()
+    return lambda text: len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def filter_only_mode(examples: list[TrainingExample], include_only_mode: bool) -> list[TrainingExample]:
+    """Include or exclude Contract v1 only-mode (quarantined) records.
+
+    Only-mode records (query carries a "/only:lex|vec|hyde" directive) are
+    flagged by ``load_examples`` via ``example.quarantined``. They are valid but
+    scoped out of the default Contract v1 training target.
+    """
+    if include_only_mode:
+        return list(examples)
+    return [ex for ex in examples if not ex.quarantined]
 
 
 def format_for_training(ex: TrainingExample) -> dict:
@@ -99,41 +119,67 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=42, help="Shuffle seed",
     )
+    parser.add_argument(
+        "--only-mode",
+        choices=["include", "exclude"],
+        default="exclude",
+        help=(
+            "Whether to keep Contract v1 only-mode records (queries with a "
+            "'/only:lex|vec|hyde' directive). Default 'exclude' matches the "
+            "Contract v1 training target; 'include' restores the legacy behavior "
+            "of training on them."
+        ),
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve input files
-    import glob as globmod
-
+    # Resolve input files (relative to the current directory, unlike the
+    # repo-root-relative audit tools: this script's default is finetune-local)
     if "*" in args.input:
-        input_files = sorted(globmod.glob(args.input))
+        input_files = sorted(glob.glob(args.input))
         if not input_files:
             print(f"Error: No files found matching: {args.input}")
-            exit(1)
+            sys.exit(1)
         print(f"Found {len(input_files)} input files")
     else:
         input_path = Path(args.input)
         if not input_path.exists():
             print(f"Error: Input file not found: {input_path}")
-            exit(1)
+            sys.exit(1)
         input_files = [str(input_path)]
 
-    # Load all examples through strict Pydantic schema
+    # Load all examples through Contract v1 (via the schema loader), using the
+    # real tokenizer for token-length checks.
+    token_counter = get_token_counter()
     all_examples: list[TrainingExample] = []
     for input_file in input_files:
-        examples = load_examples(input_file)
+        examples = load_examples(input_file, token_counter=token_counter)
         print(f"  {Path(input_file).name}: {len(examples)} examples")
         all_examples.extend(examples)
 
     print(f"Loaded {len(all_examples)} examples total")
+    if not all_examples:
+        print("No examples loaded; nothing to prepare.")
+        sys.exit(1)
 
-    # Deduplicate by query (case-insensitive)
-    seen: set[str] = set()
+    # Include or exclude Contract v1 only-mode (quarantined) records.
+    kept = filter_only_mode(all_examples, include_only_mode=(args.only_mode == "include"))
+    dropped = len(all_examples) - len(kept)
+    if dropped:
+        print(f"only-mode {args.only_mode}: dropped {dropped} quarantined records")
+    all_examples = kept
+
+    # Deduplicate by query.  This intentionally uses a looser key than
+    # Contract v1 identity (compute_input_key): queries dedup
+    # case-insensitively so near-identical queries cannot leak across the
+    # train/val split.  Intent stays in the key because it changes the
+    # rendered prompt.
+    seen: set[tuple[str, str]] = set()
     deduped: list[TrainingExample] = []
     for ex in all_examples:
-        key = ex.query.lower().strip()
+        key = (ex.query.lower().strip(), (ex.intent or "").strip())
         if key not in seen:
             seen.add(key)
             deduped.append(ex)
