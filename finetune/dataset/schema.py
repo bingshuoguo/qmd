@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Strict schema for QMD training data.
+Typed data model, loader, and renderers for QMD training data.
 
 Every JSONL file in data/ MUST conform to this format:
 
@@ -10,7 +10,19 @@ Every JSONL file in data/ MUST conform to this format:
 - output: list of [type, text] pairs where type is "lex", "vec", or "hyde"
 - Extra fields (category, intent, is_short, etc.) are allowed but ignored
 
-There is exactly ONE format. No alternatives, no legacy fallbacks.
+Responsibility split
+--------------------
+This module is the *typed view + I/O + rendering* layer:
+
+- ``TrainingExample`` / ``OutputPair`` give callers an ergonomic Pydantic model.
+- ``load_examples()`` is the fail-fast loader used by training and analysis tools.
+- The ``output_items_to_text`` / ``parse_output_text`` / ``normalize_output_items``
+  helpers render and normalize expansion lines.
+
+The **validation rules themselves live in ``dataset.contract``** (Contract v1),
+which is the single source of truth for what a valid training target is.
+``load_examples()`` delegates every record to ``contract.validate_training_target``
+rather than re-implementing rules here, so the two can never drift apart.
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ from __future__ import annotations
 import json
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Iterable
+from typing import Annotated, Callable, Iterable
 
 from pydantic import (
     BaseModel,
@@ -26,6 +38,8 @@ from pydantic import (
     ConfigDict,
     field_validator,
 )
+
+from dataset.contract import OUTPUT_TYPES, validate_training_target
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +52,9 @@ class OutputType(str, Enum):
     hyde = "hyde"
 
 
-VALID_OUTPUT_TYPES = {t.value for t in OutputType}
+# The vocabulary and its canonical order are owned by Contract v1
+# (dataset.contract.OUTPUT_TYPES); the enum exists so Pydantic can type it.
+VALID_OUTPUT_TYPES = set(OUTPUT_TYPES)
 
 
 class OutputPair(BaseModel):
@@ -90,6 +106,12 @@ class TrainingExample(BaseModel):
     intent: str | None = None
     is_short: bool | None = None
 
+    # Contract-derived metadata, populated by load_examples (not read from data).
+    # quarantined: record is an only-mode target quarantined by Contract v1.
+    # input_key: Contract v1 identity hash of (query, intent).
+    quarantined: bool = False
+    input_key: str | None = None
+
     model_config = ConfigDict(extra="ignore")
 
     @field_validator("query")
@@ -115,9 +137,35 @@ class TrainingExample(BaseModel):
 # Loading
 # ---------------------------------------------------------------------------
 
-def load_examples(path: str | Path) -> list[TrainingExample]:
-    """Load and validate a JSONL file. Fails loudly on any bad line."""
+def _naive_token_counter(text: str) -> int:
+    """Approximate token count (whitespace split) for callers without a tokenizer.
+
+    Only Contract v1's token-length checks are affected. The authoritative
+    token-length measurement is the offline audit (dataset.validate_contract),
+    which runs the pinned Qwen tokenizer. The training path passes the real
+    tokenizer through ``load_examples(..., token_counter=...)``.
+    """
+    return len(text.split())
+
+
+def load_examples(
+    path: str | Path,
+    token_counter: Callable[[str], int] | None = None,
+) -> list[TrainingExample]:
+    """Load and validate a JSONL file. Fails loudly on any invalid line.
+
+    Validation is delegated to Contract v1 (``dataset.contract``), the single
+    source of truth for training-target rules. A record quarantined by Contract
+    v1 *only* for only-mode (``TRAIN_ONLY_MODE``) is not an error here — it is
+    loaded with ``quarantined=True`` so callers (e.g. prepare_data) can decide
+    whether to include it. Any other contract error is fatal.
+
+    ``token_counter`` is forwarded to Contract v1 for its token-length checks;
+    pass the real tokenizer's counter on the training path. When omitted, an
+    approximate whitespace counter is used (see ``_naive_token_counter``).
+    """
     path = Path(path)
+    count = token_counter or _naive_token_counter
     examples: list[TrainingExample] = []
     with path.open("r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
@@ -128,10 +176,22 @@ def load_examples(path: str | Path) -> list[TrainingExample]:
                 obj = json.loads(line)
             except json.JSONDecodeError as e:
                 raise ValueError(f"{path}:{line_num}: invalid JSON: {e}") from e
+            if not isinstance(obj, dict):
+                raise ValueError(f"{path}:{line_num}: record must be a JSON object")
+
+            result = validate_training_target(obj, count)
+            fatal = [d for d in result.errors if d.code != "TRAIN_ONLY_MODE"]
+            if fatal:
+                detail = "; ".join(f"{d.code} ({d.path}): {d.message}" for d in fatal)
+                raise ValueError(f"{path}:{line_num}: {detail}")
+
             try:
-                examples.append(TrainingExample.model_validate(obj))
+                example = TrainingExample.model_validate(obj)
             except Exception as e:
                 raise ValueError(f"{path}:{line_num}: {e}") from e
+            example.quarantined = result.quarantined
+            example.input_key = result.input_key
+            examples.append(example)
     return examples
 
 
@@ -160,45 +220,13 @@ def parse_output_text(text: str) -> list[list[str]]:
 
 
 def reorder_hyde_first(items: list[list[str]]) -> list[list[str]]:
-    """Reorder items to put hyde first, then lex, then vec."""
-    hyde_items = [item for item in items if item and item[0] == "hyde"]
-    lex_items = [item for item in items if item and item[0] == "lex"]
-    vec_items = [item for item in items if item and item[0] == "vec"]
-    return hyde_items + lex_items + vec_items
-
-
-def output_items_to_text(
-    items: Iterable, hyde_first: bool = True
-) -> str:
-    """Render output pairs to prefixed text lines.
-
-    Accepts list[OutputPair] or list[list[str]].
-    """
-    normalized = []
-    for item in items:
-        if isinstance(item, OutputPair):
-            normalized.append([item.type.value, item.text.strip()])
-            continue
-        if not item:
-            continue
-        try:
-            kind, text = item[0], item[1]
-        except Exception:
-            continue
-        if kind not in VALID_OUTPUT_TYPES:
-            continue
-        if text is None:
-            continue
-        text = str(text).strip()
-        if not text:
-            continue
-        normalized.append([kind, text])
-
-    if hyde_first:
-        normalized = reorder_hyde_first(normalized)
-
-    lines = [f"{kind}: {text}" for kind, text in normalized]
-    return "\n".join(lines)
+    """Reorder items into Contract v1 canonical order (hyde, lex, vec)."""
+    return [
+        item
+        for kind in OUTPUT_TYPES
+        for item in items
+        if item and item[0] == kind
+    ]
 
 
 def normalize_output_items(
@@ -232,6 +260,17 @@ def normalize_output_items(
         normalized = reorder_hyde_first(normalized)
 
     return normalized
+
+
+def output_items_to_text(
+    items: Iterable, hyde_first: bool = True
+) -> str:
+    """Render output pairs to prefixed text lines.
+
+    Accepts list[OutputPair] or list[list[str]].
+    """
+    normalized = normalize_output_items(items, hyde_first)
+    return "\n".join(f"{kind}: {text}" for kind, text in normalized)
 
 
 def has_type(items: Iterable, kind: str) -> bool:

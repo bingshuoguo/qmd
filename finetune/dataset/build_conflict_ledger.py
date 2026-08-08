@@ -8,7 +8,8 @@ import hashlib
 import json
 import os
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -18,10 +19,18 @@ from dataset.validate_contract import (
     load_token_counter,
     resolve_paths,
     sha256_file,
+    source_label,
 )
 
 
 LEDGER_VERSION = "conflict-ledger-v1"
+
+# Rows that cannot carry a real input_key (bad JSON, non-dict record, empty
+# query) get a synthetic per-line group key with this prefix instead.  The
+# key is what is synthetic, not the row: an empty-query row still has a
+# computed candidate_hash, so the prefix -- not candidate_hash -- marks these
+# groups when entries are assembled.
+_INVALID_KEY_PREFIX = "invalid:"
 
 
 def _canonical_json(value: Any) -> str:
@@ -37,24 +46,48 @@ def _sha256_json(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def _source_label(path: Path, source_root: Path) -> str:
-    try:
-        return path.resolve().relative_to(source_root.resolve()).as_posix()
-    except ValueError:
-        return path.resolve().as_posix()
+@dataclass(frozen=True)
+class _Row:
+    """One parsed source line; the ledger's internal unit of work."""
+
+    source_path: str
+    line_number: int
+    raw_output: Any
+    canonical_output: Any
+    candidate_hash: str | None
+    query: str | None
+    intent: str | None
+    valid: bool
+    quarantined: bool
+    errors: tuple[str, ...]
 
 
-def build_ledger(
+def _invalid_row(source_path: str, line_number: int, code: str) -> _Row:
+    return _Row(
+        source_path=source_path,
+        line_number=line_number,
+        raw_output=None,
+        canonical_output=None,
+        candidate_hash=None,
+        query=None,
+        intent=None,
+        valid=False,
+        quarantined=False,
+        errors=(code,),
+    )
+
+
+def _load_groups(
     paths: Iterable[Path],
     token_counter: Callable[[str], int],
     source_root: Path,
-) -> dict[str, Any]:
-    """Build the ledger value without file I/O side effects beyond reading."""
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+) -> tuple[dict[str, list[_Row]], list[dict[str, str]]]:
+    """Read every source line once, validate it, and group rows by input_key."""
+    groups: dict[str, list[_Row]] = defaultdict(list)
     source_files: list[dict[str, str]] = []
 
     for path in sorted((item.resolve() for item in paths), key=lambda item: item.as_posix()):
-        label = _source_label(path, source_root)
+        label = source_label(path, source_root)
         source_files.append({"path": label, "sha256": sha256_file(path)})
         with path.open("r", encoding="utf-8") as handle:
             for line_number, raw_line in enumerate(handle, 1):
@@ -63,166 +96,117 @@ def build_ledger(
                 try:
                     record = json.loads(raw_line)
                 except json.JSONDecodeError:
-                    key = f"invalid:{label}:{line_number}"
-                    groups[key].append(
-                        {
-                            "source_path": label,
-                            "line_number": line_number,
-                            "raw_output": None,
-                            "canonical_output": None,
-                            "candidate_hash": None,
-                            "query": None,
-                            "intent": None,
-                            "valid": False,
-                            "quarantined": False,
-                            "errors": ["TRAIN_INVALID_JSON"],
-                        }
-                    )
+                    key = f"{_INVALID_KEY_PREFIX}{label}:{line_number}"
+                    groups[key].append(_invalid_row(label, line_number, "TRAIN_INVALID_JSON"))
                     continue
                 if not isinstance(record, dict):
-                    key = f"invalid:{label}:{line_number}"
-                    groups[key].append(
-                        {
-                            "source_path": label,
-                            "line_number": line_number,
-                            "raw_output": None,
-                            "canonical_output": None,
-                            "candidate_hash": None,
-                            "query": None,
-                            "intent": None,
-                            "valid": False,
-                            "quarantined": False,
-                            "errors": ["TRAIN_INVALID_RECORD"],
-                        }
-                    )
+                    key = f"{_INVALID_KEY_PREFIX}{label}:{line_number}"
+                    groups[key].append(_invalid_row(label, line_number, "TRAIN_INVALID_RECORD"))
                     continue
 
                 result = validate_training_target(record, token_counter)
-                key = result.input_key or f"invalid:{label}:{line_number}"
+                key = result.input_key or f"{_INVALID_KEY_PREFIX}{label}:{line_number}"
                 canonical_output = result.canonical_record["output"]
                 groups[key].append(
-                    {
-                        "source_path": label,
-                        "line_number": line_number,
-                        "raw_output": record.get("output"),
-                        "canonical_output": canonical_output,
-                        "candidate_hash": _sha256_json(canonical_output),
-                        "query": result.canonical_record["query"],
-                        "intent": result.canonical_record.get("intent"),
-                        "valid": result.valid,
-                        "quarantined": result.quarantined,
-                        "errors": [item.code for item in result.errors],
-                    }
+                    _Row(
+                        source_path=label,
+                        line_number=line_number,
+                        raw_output=record.get("output"),
+                        canonical_output=canonical_output,
+                        candidate_hash=_sha256_json(canonical_output),
+                        query=result.canonical_record["query"],
+                        intent=result.canonical_record.get("intent"),
+                        valid=result.valid,
+                        quarantined=result.quarantined,
+                        errors=tuple(item.code for item in result.errors),
+                    )
                 )
+    return groups, source_files
 
-    entries: list[dict[str, Any]] = []
-    for input_key in sorted(groups):
-        rows = groups[input_key]
-        first = rows[0]
-        candidates_by_hash: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            candidate_hash = row["candidate_hash"]
-            if candidate_hash is None:
-                continue
-            candidate = candidates_by_hash.setdefault(
-                candidate_hash,
-                {
-                    "candidate_hash": candidate_hash,
-                    "canonical_output": row["canonical_output"],
-                    "raw_variants": {},
-                    "sources": [],
-                    "valid": True,
-                    "quarantined": False,
-                    "errors": set(),
-                },
-            )
-            raw_key = _canonical_json(row["raw_output"])
-            candidate["raw_variants"].setdefault(raw_key, row["raw_output"])
-            candidate["valid"] = candidate["valid"] and row["valid"]
-            candidate["quarantined"] = candidate["quarantined"] or row["quarantined"]
-            candidate["errors"].update(row["errors"])
-            candidate["sources"].append(
-                {
-                    "path": row["source_path"],
-                    "line": row["line_number"],
-                }
-            )
 
-        candidates = []
-        for candidate_hash in sorted(candidates_by_hash):
-            candidate = candidates_by_hash[candidate_hash]
-            candidates.append(
-                {
-                    "candidate_hash": candidate_hash,
-                    "canonical_output": candidate["canonical_output"],
-                    "valid": candidate["valid"],
-                    "quarantined": candidate["quarantined"],
-                    "errors": sorted(candidate["errors"]),
-                    "raw_outputs": [
-                        candidate["raw_variants"][key]
-                        for key in sorted(candidate["raw_variants"])
-                    ],
-                    "sources": sorted(
-                        candidate["sources"],
-                        key=lambda source: (source["path"], source["line"]),
-                    ),
-                }
-            )
+def _build_candidate(candidate_hash: str, rows: list[_Row]) -> dict[str, Any]:
+    """Aggregate all rows that canonicalized to the same output."""
+    raw_variants: dict[str, Any] = {}
+    for row in rows:
+        raw_variants.setdefault(_canonical_json(row.raw_output), row.raw_output)
+    return {
+        "candidate_hash": candidate_hash,
+        "canonical_output": rows[0].canonical_output,
+        "valid": all(row.valid for row in rows),
+        "quarantined": any(row.quarantined for row in rows),
+        "errors": sorted({code for row in rows for code in row.errors}),
+        "raw_outputs": [raw_variants[key] for key in sorted(raw_variants)],
+        "sources": sorted(
+            ({"path": row.source_path, "line": row.line_number} for row in rows),
+            key=lambda source: (source["path"], source["line"]),
+        ),
+    }
 
-        valid_candidates = [candidate for candidate in candidates if candidate["valid"]]
-        if any(row["quarantined"] for row in rows):
-            classification = "quarantined_only_mode"
-            decision = "exclude"
-            reason = "Contract v1 approved only-mode quarantine"
-        elif not valid_candidates:
-            classification = "invalid"
-            decision = "exclude"
-            reason = "Contract v1 hard error"
-        elif len(valid_candidates) != len(candidates) or len(candidates) > 1:
-            classification = "target_conflict"
-            decision = "unresolved"
-            reason = None
-        elif len(rows) == 1:
-            classification = "unique"
-            decision = "select"
-            reason = "single valid target"
-        elif len(candidates[0]["raw_outputs"]) == 1:
-            classification = "identical"
-            decision = "select"
-            reason = "identical target repeated across sources"
-        else:
-            classification = "order_or_format_only"
-            decision = "select"
-            reason = "deterministic canonicalization produced one target"
 
-        selected_hash = (
-            candidates[0]["candidate_hash"]
-            if decision == "select" and len(candidates) == 1
-            else None
-        )
-        errors = sorted({code for row in rows for code in row["errors"]})
-        entries.append(
-            {
-                "input_key": input_key if not input_key.startswith("invalid:") else None,
-                "query": first["query"],
-                "intent": first["intent"],
-                "classification": classification,
-                "errors": errors,
-                "candidates": candidates,
-                "decision": decision,
-                "selected_candidate_hash": selected_hash,
-                "replacement_output": None,
-                "reason": reason,
-                "decision_origin": "automatic" if decision != "unresolved" else None,
-                "reviewer": None,
-                "reviewed_at": None,
-            }
-        )
+def _classify(
+    rows: list[_Row],
+    candidates: list[dict[str, Any]],
+) -> tuple[str, str, str | None]:
+    """Map one group's rows and candidates to (classification, decision, reason)."""
+    valid_candidates = [candidate for candidate in candidates if candidate["valid"]]
+    if any(row.quarantined for row in rows):
+        return "quarantined_only_mode", "exclude", "Contract v1 approved only-mode quarantine"
+    if not valid_candidates:
+        return "invalid", "exclude", "Contract v1 hard error"
+    if len(valid_candidates) != len(candidates) or len(candidates) > 1:
+        return "target_conflict", "unresolved", None
+    # From here on there is exactly one candidate, and it is valid.
+    if len(rows) == 1:
+        return "unique", "select", "single valid target"
+    if len(candidates[0]["raw_outputs"]) == 1:
+        return "identical", "select", "identical target repeated across sources"
+    return "order_or_format_only", "select", "deterministic canonicalization produced one target"
 
-    classification_counts: dict[str, int] = {}
-    for entry in entries:
-        classification = entry["classification"]
-        classification_counts[classification] = classification_counts.get(classification, 0) + 1
+
+def _build_entry(input_key: str, rows: list[_Row]) -> dict[str, Any]:
+    first = rows[0]
+    rows_by_hash: dict[str, list[_Row]] = defaultdict(list)
+    for row in rows:
+        if row.candidate_hash is not None:
+            rows_by_hash[row.candidate_hash].append(row)
+    candidates = [
+        _build_candidate(candidate_hash, rows_by_hash[candidate_hash])
+        for candidate_hash in sorted(rows_by_hash)
+    ]
+
+    classification, decision, reason = _classify(rows, candidates)
+    selected_hash = (
+        candidates[0]["candidate_hash"]
+        if decision == "select" and len(candidates) == 1
+        else None
+    )
+    return {
+        "input_key": input_key if not input_key.startswith(_INVALID_KEY_PREFIX) else None,
+        "query": first.query,
+        "intent": first.intent,
+        "classification": classification,
+        "errors": sorted({code for row in rows for code in row.errors}),
+        "candidates": candidates,
+        "decision": decision,
+        "selected_candidate_hash": selected_hash,
+        "replacement_output": None,
+        "reason": reason,
+        "decision_origin": "automatic" if decision != "unresolved" else None,
+        "reviewer": None,
+        "reviewed_at": None,
+    }
+
+
+def build_ledger(
+    paths: Iterable[Path],
+    token_counter: Callable[[str], int],
+    source_root: Path,
+) -> dict[str, Any]:
+    """Build the ledger value without file I/O side effects beyond reading."""
+    groups, source_files = _load_groups(paths, token_counter, source_root)
+    entries = [_build_entry(input_key, groups[input_key]) for input_key in sorted(groups)]
+
+    classification_counts = Counter(entry["classification"] for entry in entries)
     return {
         "ledger_version": LEDGER_VERSION,
         "contract_version": CONTRACT_VERSION,

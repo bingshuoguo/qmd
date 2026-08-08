@@ -76,7 +76,7 @@ def extract_named_entities(query: str) -> list:
             continue
         if word and word[0].isupper() and len(word) > 1:
             entities.append(word)
-        if any(c in word for c in ".+-0123456789") and len(word) > 1:
+        elif any(c in word for c in ".+-0123456789") and len(word) > 1:
             entities.append(word)
     return entities
 
@@ -223,6 +223,9 @@ def main():
 
     examples = load_examples(input_path)
     stats, categories, category_examples = analyze_examples(examples)
+    if stats.total_examples == 0:
+        print("No examples found; nothing to analyze.")
+        return 1
     print_report(stats, categories, category_examples)
 
     if args.show_examples > 0:

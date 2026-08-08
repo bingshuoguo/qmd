@@ -30,7 +30,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_label(path: Path, source_root: Path) -> str:
+def source_label(path: Path, source_root: Path) -> str:
     try:
         return path.resolve().relative_to(source_root.resolve()).as_posix()
     except ValueError:
@@ -39,6 +39,20 @@ def _source_label(path: Path, source_root: Path) -> str:
 
 def _diagnostic(code: str, path: str, message: str) -> dict[str, str]:
     return {"code": code, "path": path, "message": message}
+
+
+def _invalid_audit_row(
+    label: str, line_number: int, code: str, message: str
+) -> dict[str, Any]:
+    return {
+        "source_path": label,
+        "line_number": line_number,
+        "input_key": None,
+        "status": "invalid",
+        "errors": [_diagnostic(code, "$", message)],
+        "warnings": [],
+        "canonical_output": None,
+    }
 
 
 def audit_paths(
@@ -53,7 +67,7 @@ def audit_paths(
     warning_counts: Counter[str] = Counter()
 
     for path in sorted((item.resolve() for item in paths), key=lambda item: item.as_posix()):
-        label = _source_label(path, source_root)
+        label = source_label(path, source_root)
         source_files.append(
             {"path": label, "sha256": sha256_file(path)}
         )
@@ -64,47 +78,25 @@ def audit_paths(
                 try:
                     value = json.loads(raw_line)
                 except json.JSONDecodeError as error:
-                    diagnostics = [
-                        _diagnostic(
-                            "TRAIN_INVALID_JSON",
-                            "$",
-                            f"invalid JSON: {error.msg}",
-                        )
-                    ]
-                    error_counts.update(item["code"] for item in diagnostics)
-                    rows.append(
-                        {
-                            "source_path": label,
-                            "line_number": line_number,
-                            "input_key": None,
-                            "status": "invalid",
-                            "errors": diagnostics,
-                            "warnings": [],
-                            "canonical_output": None,
-                        }
+                    row = _invalid_audit_row(
+                        label,
+                        line_number,
+                        "TRAIN_INVALID_JSON",
+                        f"invalid JSON: {error.msg}",
                     )
+                    error_counts.update(item["code"] for item in row["errors"])
+                    rows.append(row)
                     continue
 
                 if not isinstance(value, dict):
-                    diagnostics = [
-                        _diagnostic(
-                            "TRAIN_INVALID_RECORD",
-                            "$",
-                            "record must be a JSON object",
-                        )
-                    ]
-                    error_counts.update(item["code"] for item in diagnostics)
-                    rows.append(
-                        {
-                            "source_path": label,
-                            "line_number": line_number,
-                            "input_key": None,
-                            "status": "invalid",
-                            "errors": diagnostics,
-                            "warnings": [],
-                            "canonical_output": None,
-                        }
+                    row = _invalid_audit_row(
+                        label,
+                        line_number,
+                        "TRAIN_INVALID_RECORD",
+                        "record must be a JSON object",
                     )
+                    error_counts.update(item["code"] for item in row["errors"])
+                    rows.append(row)
                     continue
 
                 result = validate_training_target(value, token_counter)
