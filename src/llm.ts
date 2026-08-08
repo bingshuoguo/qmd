@@ -73,6 +73,10 @@ export async function withNativeStdoutRedirectedToStderr<T>(fn: () => Promise<T>
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, readFileSync, writeFileSync, openSync, readSync, closeSync } from "fs";
+import {
+  defaultExpansionFallback,
+  parseGeneratedExpansionLines,
+} from "./query-expansion-parser.js";
 
 // =============================================================================
 // Embedding Formatting Functions
@@ -232,6 +236,29 @@ export type Queryable = {
   type: QueryType;
   text: string;
 };
+
+export function parseProductionExpansion(
+  _query: string,
+  rawOutput: string,
+  includeLexical: boolean = true,
+): { output: Queryable[]; fallbackUsed: boolean } {
+  const parsed = parseGeneratedExpansionLines(rawOutput);
+  const usable = parsed.output
+    .map(([type, text]) => ({ type: type as QueryType, text }));
+  const filtered = includeLexical
+    ? usable
+    : usable.filter(item => item.type !== "lex");
+  if (filtered.length > 0) return { output: filtered, fallbackUsed: false };
+
+  const fallback = defaultExpansionFallback(_query)
+    .map(([type, text]) => ({ type: type as QueryType, text }));
+  return {
+    output: includeLexical
+      ? fallback
+      : fallback.filter(item => item.type !== "lex"),
+    fallbackUsed: true,
+  };
+}
 
 /**
  * Document to rerank
@@ -1513,36 +1540,7 @@ export class LlamaCpp implements LLM {
     try {
       const result = await this.generateQueryExpansionRaw(query, { intent: options.intent });
 
-      const lines = result.trim().split("\n");
-      const queryLower = query.toLowerCase();
-      const queryTerms = queryLower.replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
-
-      const hasQueryTerm = (text: string): boolean => {
-        const lower = text.toLowerCase();
-        if (queryTerms.length === 0) return true;
-        return queryTerms.some(term => lower.includes(term));
-      };
-
-      const queryables: Queryable[] = lines.map(line => {
-        const colonIdx = line.indexOf(":");
-        if (colonIdx === -1) return null;
-        const type = line.slice(0, colonIdx).trim();
-        if (type !== 'lex' && type !== 'vec' && type !== 'hyde') return null;
-        const text = line.slice(colonIdx + 1).trim();
-        if (!hasQueryTerm(text)) return null;
-        return { type: type as QueryType, text };
-      }).filter((q): q is Queryable => q !== null);
-
-      // Filter out lex entries if not requested
-      const filtered = includeLexical ? queryables : queryables.filter(q => q.type !== 'lex');
-      if (filtered.length > 0) return filtered;
-
-      const fallback: Queryable[] = [
-        { type: 'hyde', text: `Information about ${query}` },
-        { type: 'lex', text: query },
-        { type: 'vec', text: query },
-      ];
-      return includeLexical ? fallback : fallback.filter(q => q.type !== 'lex');
+      return parseProductionExpansion(query, result, includeLexical).output;
     } catch (error) {
       console.error("Structured query expansion failed:", error);
       // Fallback to original query

@@ -21,8 +21,6 @@ def split_rendered_text(text: str) -> tuple[str, str]:
     prompt, completion = text[:boundary], text[boundary:]
     if not prompt or not completion:
         raise ValueError("Prompt and completion must both be non-empty.")
-    if prompt + completion != text:
-        raise AssertionError("Prompt/completion split changed the rendered text.")
     return prompt, completion
 
 

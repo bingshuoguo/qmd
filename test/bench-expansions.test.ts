@@ -71,16 +71,12 @@ describe("generated expansion parsing", () => {
       });
   });
 
-  test("uses the production fallback when all valid lines fail content checks", () => {
+  test("keeps syntactically valid output without literal query overlap", () => {
     expect(parseGeneratedExpansion("alpha", "vec: unrelated"))
       .toMatchObject({
         status: "ok",
-        output: [
-          ["hyde", "Information about alpha"],
-          ["lex", "alpha"],
-          ["vec", "alpha"],
-        ],
-        fallback_used: true,
+        output: [["vec", "unrelated"]],
+        fallback_used: false,
       });
   });
 });

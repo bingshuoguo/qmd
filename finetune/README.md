@@ -102,12 +102,17 @@ finetune/
 │   └── grpo/          # Experimental GRPO configuration and script (optional)
 ├── data/              # Training JSONL files (all concatenated for training)
 ├── dataset/
-│   ├── prepare_data.py     # Format Qwen3 prompt/completion records, dedup, split
-│   ├── completion.py       # Exact tokenization + completion-only loss mask
-│   ├── schema.py           # Parse/normalize output format
-│   ├── validate_schema.py  # Validate JSONL against schema
-│   ├── score_data.py       # Score all examples using reward.py
-│   └── analyze_data.py     # Analyze distribution and quality
+│   ├── contract.py           # Contract v1: validation rules (single source of truth)
+│   ├── schema.py             # Typed model + loader + renderers (delegates to contract)
+│   ├── prepare_data.py       # Format Qwen3 prompt/completion, dedup, split; --only-mode switch
+│   ├── completion.py         # Exact tokenization + completion-only loss mask
+│   ├── validate_schema.py    # Lightweight Contract v1 check (tokenizer-free)
+│   ├── validate_contract.py  # Full Contract v1 audit (pinned tokenizer, writes report)
+│   ├── build_conflict_ledger.py # Deterministic conflict ledger for human review
+│   ├── score_data.py         # Score all examples using reward.py
+│   └── analyze_data.py       # Analyze distribution and quality
+├── tests/             # Unit tests (contract, completion, schema delegation)
+├── fixtures/          # Frozen Contract v1 fixture cases
 ├── SCORING.md         # Detailed scoring rubric reference
 └── README.md          # This file
 ```
@@ -221,7 +226,11 @@ ollama run qmd-expand
 
 ## Data Pipeline
 
-All JSONL files in `data/` are concatenated for training. To prepare for training:
+All JSONL files in `data/` are concatenated for training. Validation rules are
+owned by **`dataset/contract.py`** (Contract v1) — the single source of truth.
+`dataset/schema.py` provides the typed Pydantic model, the fail-fast
+`load_examples()` loader (which delegates to Contract v1), and the output
+renderers, so the training path and the offline audit can never drift apart.
 
 ```bash
 # Format prompt/completion records, deduplicate, split train/val
@@ -229,6 +238,18 @@ uv run python -m dataset.prepare_data
 
 # Validate data quality
 just validate
+```
+
+### Only-mode records
+
+Records whose query carries an `/only:lex|vec|hyde` directive (the
+`data/*_only*.jsonl` files) are **quarantined by Contract v1** — valid, but
+scoped out of the default training target. `prepare_data` exposes this as an
+explicit switch:
+
+```bash
+uv run python -m dataset.prepare_data                        # default: exclude only-mode
+uv run python -m dataset.prepare_data --only-mode include    # legacy: train on them too
 ```
 
 ## Architecture Notes
