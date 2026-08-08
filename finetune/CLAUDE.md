@@ -30,7 +30,9 @@ vec: another semantic variation
 - `output`: list of `[type, text]` pairs where type is `"lex"`, `"vec"`, or `"hyde"`
 - Extra metadata fields (`category`, `intent`, `is_short`) are allowed but ignored
 
-The schema is enforced by `dataset/schema.py:TrainingExample` (Pydantic model). All data loading goes through `load_examples()` which fails loudly on invalid data. No format alternatives, no legacy fallbacks.
+The validation rules are owned by **`dataset/contract.py`** (Contract v1) — the single source of truth, a pure function with no file I/O or tokenizer dependency. `dataset/schema.py` provides the typed Pydantic view (`TrainingExample`), the fail-fast `load_examples()` loader, and the output renderers; `load_examples()` delegates every record to `contract.validate_training_target` so the training path and the offline audit never diverge. No format alternatives, no legacy fallbacks.
+
+**Only-mode quarantine:** records whose query carries an `/only:lex|vec|hyde` directive (the `data/*_only*.jsonl` files) are valid but **quarantined by Contract v1** out of the default training target. `load_examples()` loads them with `quarantined=True` rather than rejecting them; `prepare_data` decides whether to train on them (see Stage 0).
 
 **All `.jsonl` files in `data/` are concatenated and deduplicated for training runs.** The prepared train/val files in `data/train/` are ephemeral build artifacts. Prepared records contain `prompt` and `completion`: their concatenation is the exact rendered Qwen sequence, while SFT masks every prompt/template token from loss.
 
@@ -53,10 +55,13 @@ The schema is enforced by `dataset/schema.py:TrainingExample` (Pydantic model). 
 
 | Script | Purpose |
 |--------|---------|
-| `dataset/schema.py` | Pydantic `TrainingExample` model + `load_examples()` |
-| `dataset/prepare_data.py` | Load via schema, apply Qwen3 chat template, split prompt/completion, dedup, split |
+| `dataset/contract.py` | Contract v1 validation rules — single source of truth (pure, no I/O) |
+| `dataset/schema.py` | Pydantic `TrainingExample` model + `load_examples()` (delegates to contract) + renderers |
+| `dataset/prepare_data.py` | Load via schema, apply Qwen3 chat template, split prompt/completion, dedup, split; `--only-mode` switch |
 | `dataset/completion.py` | Preserve rendered tokens and build the completion-only loss mask |
-| `dataset/validate_schema.py` | Validate all JSONL files against schema |
+| `dataset/validate_schema.py` | Lightweight Contract v1 check (tokenizer-free) |
+| `dataset/validate_contract.py` | Full Contract v1 audit (pinned tokenizer, writes report dir) |
+| `dataset/build_conflict_ledger.py` | Deterministic conflict ledger for human review |
 | `dataset/score_data.py` | Score all examples using reward.py |
 | `dataset/analyze_data.py` | Analyze distribution and quality |
 
@@ -69,6 +74,8 @@ Always use **Qwen3-1.7B** as the base model unless explicitly stated otherwise.
 ```bash
 uv run python -m dataset.prepare_data
 # Creates: data/train/train.jsonl, data/train/val.jsonl (ephemeral)
+# Default excludes Contract v1 only-mode (quarantined) records.
+# To train on them as before: --only-mode include
 ```
 
 ### Stage 1: SFT

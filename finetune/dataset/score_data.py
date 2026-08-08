@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from dataset.schema import load_examples, output_items_to_text
+from dataset.validate_contract import resolve_paths
 from reward import score_expansion_detailed
 
 
@@ -56,14 +57,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(__file__).parent.parent.parent
-    files: list[Path] = []
-    for pattern in args.paths:
-        if "*" in pattern:
-            files.extend(repo_root.glob(pattern))
-        else:
-            files.append(repo_root / pattern)
-
-    files = [p for p in files if p.exists()]
+    files = resolve_paths(args.paths, repo_root)
     if not files:
         print("No files found to score.")
         return 1
