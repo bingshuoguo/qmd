@@ -2,7 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- SciFact distillation pipeline under `finetune/benchmarks/distill/`: freeze the
+  644/161 train/val split (`distill:split`), generate four teacher candidates
+  per query with resume (`distill:generate`, DeepSeek/OpenAI teachers via
+  `lib/openai-teacher.ts`), score and select through the frozen QMD retrieval
+  profile (`distill:score`/`ablate`/`report`), and validate/materialize
+  completion-only SFT with the Contract v1.1 python validator
+  (`dataset/scifact_distill.py`). Generates are driven by env-configurable
+  prompt profiles (new `distill:*` npm scripts, `.env.distill.*.example`
+  templates).
+
 ### Internal
+
+- Generalize the SciFact-only BEIR prep into a multi-dataset framework
+  (`finetune/benchmarks/lib/beir.ts` + `beir/scifact.ts` config), replacing
+  `prepare-scifact.ts` and `generate-expansions.ts` with a shared `expand.ts`
+  CLI.
 
 - Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`
   (`context`, `term`, `output`, `help`, and `commands/{docs,search,indexing,
