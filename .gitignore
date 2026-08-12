@@ -2,6 +2,8 @@ node_modules/
 dist/
 package-lock.json
 .npmrc
+.env.distill.local
+.env.distill.*.local
 *.sqlite
 .DS_Store
 archive/
@@ -18,7 +20,9 @@ texts/
 # exception above only when a specific document is intentionally releasable.
 /docs/**/*.md
 /docs/*.md
+/docs/qmd-architecture-overview.html
 finetune/outputs/
+finetune/data/external/
 finetune/data/train/
 .claude/
 .idea/
