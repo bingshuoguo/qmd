@@ -152,7 +152,7 @@ sha256("qmd-public-v0\0seed=42\0" + source_id + "\0" + qid)
 - 排除 smoke 后，依次取各自的 750/875/875 条进入正式 input pool；
 - 某个来源不足其固定配额时 preparation 失败，不从其他来源补齐。
 
-因此 smoke 固定为 30 条，正式 input pool 固定为 2,500 条；正式运行不会因结果好坏重新抽样。
+因此 smoke 固定为 30 条，正式 input pool 固定为 2,500 条；两者的 `input_id` 必须零重叠。smoke 的 candidate、selected 和 materialized records 只用于流水线验证，永远不能合并进正式 SFT。正式运行不会因结果好坏重新抽样。
 
 ## 7. Teacher 候选生成
 
@@ -319,11 +319,12 @@ finetune/data/public-distill-v0/
 1. 实现并测试多来源 prepare、通用 distill record、Recall@10-first selection 和 artifact manifest。
 2. 用户显式下载或授权下载 FiQA/CQADupStack archive；校验官方 MD5。
 3. prepare 三个来源、建立 isolated collections/index、冻结 30 条 smoke pool 和 2,500 条 main pool。
-4. smoke：30 queries × 4 candidates，共 120 次 teacher 请求；跑完整生成、Contract、检索、选择、物化链路。
-5. smoke 只判断流程能否走通，包括零未解释异常、artifact 可 resume、collection 无串库、指标可复算；不据此改 prompt。
-6. main：2,500 queries × 4 candidates，最多 10,000 个成功 candidate 请求；冻结 candidates 后完成评分和选择。
-7. 生成 accepted set、train/validation、质量报告和完整 provenance。
-8. 数据审计通过后，才进入 completion-only SFT 实验设计。
+4. smoke：FiQA 10 + programmers 10 + unix 10，共 30 queries；每条生成 4 个 candidates，共 120 次 teacher 请求。
+5. smoke 必须顺序跑通下载校验、转换、索引、候选生成、Contract v1.1、非重复检查、QMD 检索、winner/qualified-tie/no-winner 分类和 SFT 格式物化。任何阶段失败都不得启动 main。
+6. smoke 只判断流水线闭环，包括零未解释异常、artifact 可 resume、collection 无串库、指标可复算；不据此调整 prompt。smoke 的物化结果必须带 `smoke_only=true`，并存放在独立 experiment 目录，不得进入最终 SFT。
+7. main：只有 smoke 门禁通过后才能运行 2,500 queries × 4 candidates，最多 10,000 个成功 candidate 请求；冻结 candidates 后完成评分和选择。
+8. 生成 accepted set、train/validation、质量报告和完整 provenance。
+9. 数据审计通过后，才进入 completion-only SFT 实验设计。
 
 当前本地没有 FiQA/CQADupStack 数据不构成设计阻塞；下载、解压、索引都属于 Spec 获批后的执行阶段。本轮不得提前运行这些操作。
 
@@ -375,8 +376,8 @@ finetune/data/public-distill-v0/
 1. 单元测试覆盖抽样、阈值二值化、Contract/repeat-only、三指标字典序、qualified tie、hash tie-break、分层裁剪和错误状态。
 2. 集成测试证明 query 不能检索其他 source collection。
 3. 同一 archive、seed、code、prompt 和 profile 两次 prepare/score 的 artifact hash 一致。
-4. smoke 30 条能从下载后的公开数据走通完整链路，且能中断续跑。
-5. main pool 精确为 2,500 条，smoke 30 条与 main 零重叠。
+4. smoke 30 条按 `FiQA 10 + programmers 10 + unix 10` 从下载校验到 SFT 格式物化走通完整链路，且能中断续跑。
+5. main pool 精确为 2,500 条，smoke 30 条与 main 的 `input_id` 零重叠；smoke 物化记录带 `smoke_only=true`，最终 SFT 中该字段的记录数为零。
 6. 每个 SFT target 都能反查 source qrels、4 个 frozen candidates、raw/selected 排名和选择原因。
 7. 正式产物来自 clean commit，manifest 无密钥且所有关键输入有 hash。
 
