@@ -11,10 +11,13 @@ import {
 import {
   computeConvertedDataSha256,
   normalizeLeakageQuery,
-  renderSciFactMarkdown,
+  prepareBeir,
+  renderCorpusMarkdown,
   safeExtractZip,
   verifyArchiveMd5,
-} from "../finetune/benchmarks/prepare-scifact.js";
+  verifyPreparedBeir,
+} from "../finetune/benchmarks/lib/beir.js";
+import { SCIFACT_CONFIG } from "../finetune/benchmarks/beir/scifact.js";
 import {
   mkdirSync,
   mkdtempSync,
@@ -24,6 +27,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 const queriesText = [
   JSON.stringify({ qid: "q1", query: "first claim" }),
@@ -267,9 +271,99 @@ function storedZip(name: string, content = "content"): Buffer {
   return Buffer.concat([local, nameBytes, contentBytes, central, nameBytes, eocd]);
 }
 
+/** Multi-entry stored (uncompressed) ZIP, for end-to-end prepare tests. */
+function storedZipMulti(entries: ReadonlyArray<readonly [string, string]>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  for (const [name, content] of entries) {
+    const nameBytes = Buffer.from(name);
+    const contentBytes = Buffer.from(content);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(contentBytes.length, 18);
+    local.writeUInt32LE(contentBytes.length, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    localParts.push(local, nameBytes, contentBytes);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(contentBytes.length, 20);
+    central.writeUInt32LE(contentBytes.length, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, nameBytes);
+
+    offset += 30 + nameBytes.length + contentBytes.length;
+  }
+  const centralOffset = offset;
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralSize, 12);
+  eocd.writeUInt32LE(centralOffset, 16);
+  return Buffer.concat([...localParts, ...centralParts, eocd]);
+}
+
+describe("prepareBeir end-to-end", () => {
+  // Deliberately unsorted: the converter must sort corpus and queries by id.
+  const corpusText = [
+    JSON.stringify({ _id: "d2", title: "Beta", text: "Second body" }),
+    JSON.stringify({ _id: "d1", title: "Alpha", text: "First body" }),
+    "",
+  ].join("\n");
+  const queriesText = [
+    JSON.stringify({ _id: "q1", text: "first claim" }),
+    JSON.stringify({ _id: "q2", text: "second claim" }),
+    "",
+  ].join("\n");
+
+  function runPrepare(
+    config: typeof SCIFACT_CONFIG,
+    qrelsBody: string,
+  ): { root: string; output: string } {
+    const root = mkdtempSync(join(tmpdir(), "qmd-beir-e2e-"));
+    const archive = join(root, "dataset.zip");
+    const zipBytes = storedZipMulti([
+      ["dataset/corpus.jsonl", corpusText],
+      ["dataset/queries.jsonl", queriesText],
+      ["dataset/qrels/test.tsv", qrelsBody],
+    ]);
+    writeFileSync(archive, zipBytes);
+    const archiveMd5 = createHash("md5").update(zipBytes).digest("hex");
+    const output = join(root, "benchmark");
+    prepareBeir({ ...config, archiveMd5 }, { archive, output, trainingFiles: [] });
+    return { root, output };
+  }
+
+  test("binary dataset (scifact) preserves qrels bytes and layout", () => {
+    const qrels = "query-id\tcorpus-id\tscore\nq1\td1\t1\nq2\td2\t1\n";
+    const { root, output } = runPrepare(SCIFACT_CONFIG, qrels);
+    try {
+      expect(readFileSync(join(output, "corpus", "d1.md"), "utf8")).toBe("# Alpha\n\nFirst body\n");
+      expect(readFileSync(join(output, "corpus", "d2.md"), "utf8")).toBe("# Beta\n\nSecond body\n");
+      expect(readFileSync(join(output, "documents.jsonl"), "utf8"))
+        .toBe('{"doc_id":"d1","path":"d1.md"}\n{"doc_id":"d2","path":"d2.md"}\n');
+      expect(readFileSync(join(output, "queries.jsonl"), "utf8"))
+        .toBe('{"qid":"q1","query":"first claim"}\n{"qid":"q2","query":"second claim"}\n');
+      // Already-binary qrels pass through byte-identically.
+      expect(readFileSync(join(output, "qrels.tsv"), "utf8")).toBe(qrels);
+      expect(readFileSync(join(output, "source-qrels.tsv"), "utf8")).toBe(qrels);
+      expect(verifyPreparedBeir(output).hash).toBe(computeConvertedDataSha256(output));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("SciFact preparation primitives", () => {
   test("rejects archive MD5 mismatch", () => {
-    expect(() => verifyArchiveMd5(Buffer.from("not-scifact")))
+    expect(() => verifyArchiveMd5(Buffer.from("not-scifact"), SCIFACT_CONFIG.archiveMd5))
       .toThrow("archive MD5 mismatch");
   });
 
@@ -294,7 +388,7 @@ describe("SciFact preparation primitives", () => {
   });
 
   test("renders the frozen Markdown template with LF endings", () => {
-    expect(renderSciFactMarkdown("Title\r\nLine", "Text\r\nbody"))
+    expect(renderCorpusMarkdown("Title\r\nLine", "Text\r\nbody"))
       .toBe("# Title\nLine\n\nText\nbody\n");
   });
 

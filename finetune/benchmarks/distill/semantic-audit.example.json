@@ -1,0 +1,11 @@
+{
+  "version": "scifact-distill-semantic-audit-v1",
+  "entries": [
+    {
+      "qid": "replace-with-qid",
+      "candidate_index": 0,
+      "severity": "safe",
+      "notes": "Preserves entities, polarity, numbers, relationships, and uncertainty."
+    }
+  ]
+}
