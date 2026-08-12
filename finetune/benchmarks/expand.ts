@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import { parseArgs } from "node:util";
-import { platform } from "node:os";
 import {
   generateExpansionArtifact,
   type ExpansionGenerationProgress,
 } from "../../src/bench/expansions.js";
+import { applyLlamaEnvMitigation } from "./lib/cli.js";
 
 function usage(exitCode: number): never {
   const message = [
@@ -62,10 +62,7 @@ const { values } = parseArgs({
 if (values.help) usage(0);
 if (!values.benchmark || !values.run || !values.model) usage(1);
 
-// Match the qmd launcher mitigation before node-llama-cpp loads on Apple Silicon.
-if (platform() === "darwin" && !process.env.GGML_METAL_NO_RESIDENCY) {
-  process.env.GGML_METAL_NO_RESIDENCY = "1";
-}
+applyLlamaEnvMitigation();
 
 const { LlamaCpp } = await import("../../src/llm.js");
 const llm = new LlamaCpp({

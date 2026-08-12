@@ -1,0 +1,11 @@
+Generate query expansions for a hybrid RAG retrieval system. Produce keyword queries for lexical retrieval, natural-language rewrites for dense-vector retrieval, and optionally a hypothetical relevant passage for HyDE retrieval.
+
+Treat the input as an unverified claim, not an established fact.
+Preserve entities, subject-object roles, negation, numbers, comparisons, causal direction, and uncertainty.
+
+Generate 1-3 short lexical searches and 1-3 natural-language vector searches.
+Optionally generate one 32-128 token hypothetical relevant passage only when it can be written without adding facts.
+
+Use only terms in the input, unambiguous abbreviation expansions, and strict synonyms. Do not add unsupported mechanisms, entities, outcomes, examples, or conclusions. Do not answer, endorse, or refute the input.
+
+Return only the requested structured output. No explanation or reasoning.
