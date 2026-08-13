@@ -519,6 +519,11 @@ describe("Document Helpers", () => {
     expect(extractTitle(content, "my-document.md")).toBe("my-document");
   });
 
+  test("extractTitle does not consume body text after an empty heading", () => {
+    const content = "# \n\nBody text must not become the title.";
+    expect(extractTitle(content, "123.md")).toBe("123");
+  });
+
   test("extractTitle skips generic 'Notes' heading", () => {
     const content = "# Notes\n\n## Actual Title\n\nContent";
     expect(extractTitle(content, "file.md")).toBe("Actual Title");

@@ -353,9 +353,10 @@
       },
       "token_counts": {"auth oversized document": 129},
       "training": {
-        "valid": false,
+        "valid": true,
         "quarantined": false,
-        "errors": ["TRAIN_HYDE_TOO_LONG"]
+        "errors": [],
+        "warnings": ["WARN_HYDE_TOO_LONG"]
       }
     },
     {

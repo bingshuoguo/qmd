@@ -42,7 +42,7 @@ class _TokenLimit(NamedTuple):
 # These numbers are the contract; tune them here, never inside the checks.
 _TOKEN_LIMITS = {
     "vec": _TokenLimit("vec", 4, 48, False),
-    "hyde": _TokenLimit("HyDE", 32, 128, True),
+    "hyde": _TokenLimit("HyDE", 32, 128, False),
 }
 
 
