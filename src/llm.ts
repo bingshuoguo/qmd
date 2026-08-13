@@ -671,6 +671,19 @@ export function resolveLlamaGpuMode(
   return "auto";
 }
 
+
+/** node-llama-cpp 3.20 made LlamaContextSequence.dispose() async (llama.cpp b10361).
+ * Context.onDispose fires sequence.dispose() without awaiting, so dispose the
+ * sequence first and wait, then dispose the parent context.
+ */
+async function disposeSequenceThenContext(
+  sequence: { dispose: () => void | Promise<void> } | undefined,
+  context: { dispose: () => Promise<void> },
+): Promise<void> {
+  if (sequence) await sequence.dispose();
+  await context.dispose();
+}
+
 async function disposeWithTimeout(resourceName: string, dispose: () => Promise<void>, timeoutMs = 1000): Promise<void> {
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     setTimeout(() => resolve("timeout"), timeoutMs).unref();
@@ -1454,8 +1467,8 @@ export class LlamaCpp implements LLM {
         done: true,
       };
     } finally {
-      // Dispose context (which disposes dependent sequences/sessions per lifecycle rules)
-      await context.dispose();
+      // Sequence dispose is async as of node-llama-cpp 3.20; await it before the parent context.
+      await disposeSequenceThenContext(sequence, context);
     }
   }
 
@@ -1506,8 +1519,9 @@ export class LlamaCpp implements LLM {
     const context = await this.generateModel!.createContext({
       contextSize: this.expandContextSize,
     });
+    let sequence: { dispose: () => void | Promise<void> } | undefined;
     try {
-      const sequence = context.getSequence();
+      sequence = context.getSequence();
       const { LlamaChatSession } = await loadNodeLlamaCpp();
       const session = new LlamaChatSession({ contextSequence: sequence });
       return await session.prompt(prompt, {
@@ -1522,7 +1536,8 @@ export class LlamaCpp implements LLM {
         },
       });
     } finally {
-      await context.dispose();
+      // Sequence dispose is async as of node-llama-cpp 3.20; await it before the parent context.
+      await disposeSequenceThenContext(sequence, context);
     }
   }
 
