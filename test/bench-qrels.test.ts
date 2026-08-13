@@ -18,6 +18,7 @@ import {
   verifyPreparedBeir,
 } from "../finetune/benchmarks/lib/beir.js";
 import { SCIFACT_CONFIG } from "../finetune/benchmarks/beir/scifact.js";
+import { FIQA_CONFIG } from "../finetune/benchmarks/beir/fiqa.js";
 import {
   mkdirSync,
   mkdtempSync,
@@ -197,6 +198,8 @@ describe("v2 manifest validation", () => {
   test("accepts the frozen benchmark ID and metrics", () => {
     expect(validateBenchmarkManifest(manifest).benchmark_id)
       .toBe("qmd-expansion-scifact-v1");
+    expect(validateBenchmarkManifest({ ...manifest, source: { ...manifest.source, split: "train" } }).source.split)
+      .toBe("train");
   });
 
   test("rejects benchmark ID mismatch, unknown metrics, and invalid cutoffs", () => {
@@ -354,6 +357,21 @@ describe("prepareBeir end-to-end", () => {
       // Already-binary qrels pass through byte-identically.
       expect(readFileSync(join(output, "qrels.tsv"), "utf8")).toBe(qrels);
       expect(readFileSync(join(output, "source-qrels.tsv"), "utf8")).toBe(qrels);
+      expect(verifyPreparedBeir(output).hash).toBe(computeConvertedDataSha256(output));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("graded dataset (fiqa) binarizes scores and drops sub-threshold rows", () => {
+    const source = "query-id\tcorpus-id\tscore\nq1\td1\t3\nq1\td2\t1\nq2\td2\t2\n";
+    const { root, output } = runPrepare(FIQA_CONFIG, source);
+    try {
+      // 3 -> 1, the score-1 row falls below threshold 2 and is dropped, 2 -> 1.
+      expect(readFileSync(join(output, "qrels.tsv"), "utf8"))
+        .toBe("query-id\tcorpus-id\tscore\nq1\td1\t1\nq2\td2\t1\n");
+      // Provenance keeps the raw graded scores.
+      expect(readFileSync(join(output, "source-qrels.tsv"), "utf8")).toBe(source);
       expect(verifyPreparedBeir(output).hash).toBe(computeConvertedDataSha256(output));
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -180,9 +180,7 @@ export function validateBenchmarkManifest(
   if (typeof source.archive_md5 !== "string" || !/^[a-f0-9]{32}$/.test(source.archive_md5)) {
     throw new Error("benchmark.yaml: source.archive_md5 must be a lowercase MD5");
   }
-  if (source.split !== "test") {
-    throw new Error('benchmark.yaml: source.split must be "test"');
-  }
+  nonEmptyString(source.split, "benchmark.yaml.source.split");
   for (const key of [
     "source_qrels_sha256",
     "excluded_qids_sha256",
