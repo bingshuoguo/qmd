@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Dependencies: `node-llama-cpp` 3.18.1 → **3.20.0** (llama.cpp b8390 → b10361), plus `picomatch` 4.0.5, `web-tree-sitter` 0.26.12, `tsx` 4.23.12, `vitest` 3.2.7 (cherry-picked from upstream #891). node-llama-cpp ≥3.19 no longer applies a second sigmoid to Qwen3 reranker output, which llama.cpp already softmax-normalizes; rerank scores now span [0, 1] instead of being squashed into [0.5, 0.731].
+- `generate` and query expansion now await `LlamaContextSequence.dispose()` before disposing the parent context. node-llama-cpp 3.20 made sequence dispose async; the library's context-onDispose path does not wait.
+
 ### Added
 
 - SciFact distillation pipeline under `finetune/benchmarks/distill/`: freeze the
