@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -33,6 +34,7 @@ const { values } = parseArgs({
     root: { type: "string", default: "finetune/data/public-distill-v0" },
     pool: { type: "string", default: "smoke" },
     preflight: { type: "boolean", default: false },
+    "retry-generation-errors": { type: "boolean", default: false },
   },
 });
 if (values.pool !== "smoke" && values.pool !== "main") throw new Error("--pool must be smoke or main");
@@ -123,6 +125,96 @@ if (values.preflight) {
   process.exit(0);
 }
 mkdirSync(runDir, { recursive: true });
+if (values["retry-generation-errors"]) {
+  if (!existsSync(candidatesPath) || !existsSync(manifestPath)) {
+    throw new Error("--retry-generation-errors requires completed candidates.jsonl and run-manifest.json");
+  }
+  if (existsSync(partialPath)) throw new Error("Cannot retry while candidates.jsonl.partial exists");
+  const originalBytes = readFileSync(candidatesPath);
+  const originalSha256 = sha256(originalBytes);
+  const records = originalBytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (
+    manifest.candidates_sha256 !== originalSha256
+    || manifest.pool_sha256 !== sha256(poolBytes)
+    || manifest.prompt_sha256 !== prompt.sha256
+    || records.length !== pool.length
+    || records.some((record, index) => record.input_id !== pool[index]?.input_id)
+  ) {
+    throw new Error("Existing candidate run does not match its frozen pool, Prompt, or manifest");
+  }
+  const backupPath = `${candidatesPath}.before-retry-${originalSha256}`;
+  if (!existsSync(backupPath)) copyFileSync(candidatesPath, backupPath);
+  let retriedCandidates = 0;
+  for (const record of records) {
+    for (const candidate of record.candidates) {
+      if (candidate.generation_status === "ok") continue;
+      const startedAt = performance.now();
+      try {
+        const result = await generateOpenAiChatExpansion({
+          apiKey,
+          baseUrl,
+          model,
+          query: record.query,
+          maxOutputTokens,
+          prompt,
+          thinkingMode: "disabled",
+          maxAttempts: 3,
+        });
+        Object.assign(candidate, {
+          generation_status: "ok",
+          raw_output: result.raw_output,
+          parsed_output: result.parsed_output,
+          generation_error: null,
+          generation_error_type: null,
+          generation_diagnostics: null,
+          latency_ms: performance.now() - startedAt,
+          contract: null,
+          repeat_check: null,
+          retrieval: null,
+        });
+      } catch (error) {
+        const known = error instanceof OpenAiGenerationError ? error : null;
+        Object.assign(candidate, {
+          generation_status: "generation_error",
+          raw_output: "",
+          parsed_output: [],
+          generation_error: error instanceof Error ? error.message : String(error),
+          generation_error_type: known?.code ?? null,
+          generation_diagnostics: known?.diagnostics ?? null,
+          latency_ms: performance.now() - startedAt,
+          contract: null,
+          repeat_check: null,
+          retrieval: null,
+        });
+      }
+      retriedCandidates++;
+      process.stderr.write(`Retried ${record.input_id} candidate ${candidate.candidate_index + 1}/4: ${candidate.generation_status}\n`);
+    }
+  }
+  const retryPath = `${candidatesPath}.retry.tmp`;
+  writeFileSync(retryPath, `${records.map(record => JSON.stringify(record)).join("\n")}\n`, "utf8");
+  renameSync(retryPath, candidatesPath);
+  const remainingErrors = records.flatMap(record => record.candidates)
+    .filter(candidate => candidate.generation_status !== "ok").length;
+  manifest.candidates_sha256 = sha256(readFileSync(candidatesPath));
+  manifest.generation_errors = remainingErrors;
+  manifest.generation_retries = [
+    ...(Array.isArray(manifest.generation_retries) ? manifest.generation_retries : []),
+    {
+      retried_at: new Date().toISOString(),
+      qmd_commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+      qmd_dirty: dirtyEntries.length > 0,
+      source_candidates_sha256: originalSha256,
+      backup_path: basename(backupPath),
+      retried_candidates: retriedCandidates,
+      remaining_generation_errors: remainingErrors,
+    },
+  ];
+  json(manifestPath, manifest);
+  process.stdout.write(`${JSON.stringify({ retried_candidates: retriedCandidates, remaining_generation_errors: remainingErrors }, null, 2)}\n`);
+  process.exit(remainingErrors === 0 ? 0 : 1);
+}
 if (existsSync(candidatesPath)) throw new Error(`Candidate artifact already exists: ${candidatesPath}`);
 const completed = existsSync(partialPath)
   ? readFileSync(partialPath, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line))

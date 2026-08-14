@@ -43,8 +43,15 @@ if (existsSync(scoredPath) || existsSync(selectedPath)) throw new Error("Scored 
 const validatedBytes = readFileSync(validatedPath);
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 if (manifest.validated_sha256 !== sha256(validatedBytes)) throw new Error("validated.jsonl hash mismatch");
+if (manifest.generation_errors !== 0) throw new Error("Scoring requires generation_errors=0");
 const records = validatedBytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
-if (records.length !== 30) throw new Error(`Expected 30 validated records, got ${records.length}`);
+const expectedRecords = manifest.smoke_only === true ? 30 : 2500;
+if (records.length !== expectedRecords) {
+  throw new Error(`Expected ${expectedRecords} validated records, got ${records.length}`);
+}
+if (manifest.smoke_only !== true && diagnosticReducedIndex) {
+  throw new Error("Formal runs require --index-scope formal");
+}
 
 const sourceIds = ["fiqa-train", "cqadup-programmers", "cqadup-unix"];
 const sources = new Map(sourceIds.map(sourceId => {
@@ -151,7 +158,7 @@ try {
     }
     scored.push(record);
     appendFileSync(partialPath, `${JSON.stringify(record)}\n`, "utf8");
-    process.stderr.write(`Scored ${scored.length}/30 ${record.input_id}: ${record.selection_status}\n`);
+    process.stderr.write(`Scored ${scored.length}/${expectedRecords} ${record.input_id}: ${record.selection_status}\n`);
   }
   renameSync(partialPath, scoredPath);
   writeFileSync(selectedPath, readFileSync(scoredPath));
@@ -183,7 +190,7 @@ try {
   writeJson(manifestPath, manifest);
   writeJson(join(runDir, "report.json"), {
     schema_version: "qmd-public-distill-report-v0",
-    smoke_only: true,
+    smoke_only: manifest.smoke_only === true,
     diagnostic_reduced_index: diagnosticReducedIndex,
     final_sft_eligible: false,
     input_queries: scored.length,
