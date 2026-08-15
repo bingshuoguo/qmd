@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract validation and smoke-only materialization for public distillation."""
+"""Contract validation and deterministic materialization for public distillation."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unicodedata
+from collections import Counter, defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,11 @@ from dataset.scifact_distill import load_tokenizer, render_sft_record
 
 TOKENIZER_MODEL = "Qwen/Qwen3-1.7B"
 TOKENIZER_REVISION = "70d244cc86ccca08cf5af4e1e306ecf908b1ad5e"
+FORMAL_SOURCE_COUNTS = {
+    "fiqa-train": 750,
+    "cqadup-programmers": 866,
+    "cqadup-unix": 884,
+}
 
 
 def sha256_file(path: Path) -> str:
@@ -67,6 +74,36 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 def normalized(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().strip().split())
+
+
+def largest_remainder(counts: dict[str, int], total: int) -> dict[str, int]:
+    population = sum(counts.values())
+    if total < 0 or total > population:
+        raise ValueError(f"invalid allocation total {total} for population {population}")
+    allocation = {key: total * count // population for key, count in counts.items()}
+    remaining = total - sum(allocation.values())
+    order = sorted(counts, key=lambda key: (-(total * counts[key] % population), key))
+    for key in order[:remaining]:
+        allocation[key] += 1
+    return allocation
+
+
+def split_hash(input_id: str) -> str:
+    return hashlib.sha256(
+        f"qmd-public-v0-sft-split\0seed=42\0{input_id}".encode()
+    ).hexdigest()
+
+
+def git_provenance() -> tuple[str, list[str]]:
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=all"], text=True
+    )
+    dirty = [
+        line for line in status.splitlines()
+        if line and not line[3:].startswith("finetune/data/public-distill-v0/")
+    ]
+    return commit, dirty
 
 
 def load_manifest(run_dir: Path) -> dict[str, Any]:
@@ -145,29 +182,76 @@ def validate(run_dir: Path, local_files_only: bool) -> None:
 
 def materialize(run_dir: Path, local_files_only: bool) -> None:
     selected_path = run_dir / "selected.jsonl"
-    output_path = run_dir / "sft-smoke.jsonl"
-    if output_path.exists():
-        raise ValueError(f"materialized artifact already exists: {output_path}")
     manifest = load_manifest(run_dir)
+    smoke_only = manifest.get("smoke_only") is True
+    output_paths = (
+        [run_dir / "sft-smoke.jsonl"]
+        if smoke_only
+        else [run_dir / "sft.jsonl", run_dir / "sft-train.jsonl", run_dir / "sft-validation.jsonl"]
+    )
+    existing = [path for path in output_paths if path.exists()]
+    if existing:
+        raise ValueError(f"materialized artifact already exists: {existing[0]}")
     if manifest.get("selected_sha256") != sha256_file(selected_path):
         raise ValueError("selected.jsonl hash does not match run manifest")
+    report_path = run_dir / "report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+    materialization_commit, materialization_dirty = git_provenance()
+    if not smoke_only:
+        if materialization_dirty:
+            raise ValueError(
+                "formal materialization requires clean versioned source files: "
+                + ", ".join(materialization_dirty)
+            )
+        if manifest.get("qmd_dirty") is not False or manifest.get("generation_errors") != 0:
+            raise ValueError("formal materialization requires a clean run with zero generation errors")
+        profile = manifest.get("retrieval_profile")
+        if not isinstance(profile, dict) or profile.get("diagnostic_reduced_index") is not False:
+            raise ValueError("formal materialization requires the complete formal index")
+        if report.get("retrieval_errors") != 0 or report.get("input_queries") != 2500:
+            raise ValueError("formal materialization requires 2500 inputs and zero retrieval errors")
     tokenizer = load_tokenizer(TOKENIZER_MODEL, TOKENIZER_REVISION, local_files_only)
     counter = lambda text: len(tokenizer.encode(text, add_special_tokens=False))
     records = read_jsonl(selected_path)
+    if not smoke_only:
+        source_counts = Counter(record.get("source_id") for record in records)
+        if dict(source_counts) != FORMAL_SOURCE_COUNTS:
+            raise ValueError(f"formal source counts do not match frozen quotas: {dict(source_counts)}")
+    accepted = [
+        record for record in records
+        if record.get("selection_status") in {"winner", "qualified_tie"}
+    ]
+    accepted_strata = Counter(
+        f'{record.get("source_id")}|{record.get("selection_status")}' for record in accepted
+    )
+    selected_records = accepted
+    if not smoke_only and len(accepted) > 2000:
+        cap_allocation = largest_remainder(dict(accepted_strata), 2000)
+        by_stratum: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in accepted:
+            by_stratum[f'{record.get("source_id")}|{record.get("selection_status")}'].append(record)
+        selected_records = []
+        for stratum in sorted(by_stratum):
+            ordered = sorted(
+                by_stratum[stratum],
+                key=lambda record: (record.get("sample_key", ""), record.get("qid", "")),
+            )
+            selected_records.extend(ordered[:cap_allocation[stratum]])
+    if not smoke_only and len(selected_records) < 1000:
+        raise ValueError("formal accepted set is below the minimum training scale")
+
     materialized: list[dict[str, Any]] = []
     seen_inputs: set[str] = set()
     seen_queries: set[str] = set()
-    for record in records:
-        status = record.get("selection_status")
-        if status not in {"winner", "qualified_tie"}:
-            continue
+    for record in selected_records:
+        status = record["selection_status"]
         input_id = record.get("input_id")
         query = record.get("query")
         selected_index = record.get("selected_candidate_index")
         if not isinstance(input_id, str) or not isinstance(query, str):
             raise ValueError("selected record is missing input_id/query")
         if input_id in seen_inputs or normalized(query) in seen_queries:
-            raise ValueError(f"duplicate accepted smoke record: {input_id}")
+            raise ValueError(f"duplicate accepted record: {input_id}")
         seen_inputs.add(input_id)
         seen_queries.add(normalized(query))
         if not isinstance(selected_index, int):
@@ -189,22 +273,75 @@ def materialize(run_dir: Path, local_files_only: bool) -> None:
                 "schema_version": "qmd-public-distill-v0",
                 "input_id": input_id,
                 "source_id": record["source_id"],
-                "selection_label": status,
+                "selection_status": status,
                 "selected_candidate_index": selected_index,
-                "smoke_only": True,
+                "experiment_id": manifest.get("experiment_id"),
+                "smoke_only": smoke_only,
+                "final_sft_eligible": not smoke_only,
             }
         )
         materialized.append(rendered)
-    atomic_jsonl(output_path, materialized)
+
+    train: list[dict[str, Any]] = []
+    validation: list[dict[str, Any]] = []
+    if smoke_only:
+        atomic_jsonl(output_paths[0], materialized)
+    else:
+        capped_strata = Counter(
+            f'{record["source_id"]}|{record["selection_status"]}' for record in materialized
+        )
+        validation_allocation = largest_remainder(dict(capped_strata), len(materialized) // 10)
+        by_stratum: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in materialized:
+            by_stratum[f'{record["source_id"]}|{record["selection_status"]}'].append(record)
+        for stratum in sorted(by_stratum):
+            ordered = sorted(
+                by_stratum[stratum],
+                key=lambda record: (split_hash(record["input_id"]), record["input_id"]),
+            )
+            validation_count = validation_allocation[stratum]
+            validation.extend({**record, "split": "validation"} for record in ordered[:validation_count])
+            train.extend({**record, "split": "train"} for record in ordered[validation_count:])
+        combined = train + validation
+        atomic_jsonl(output_paths[0], combined)
+        atomic_jsonl(output_paths[1], train)
+        atomic_jsonl(output_paths[2], validation)
+
     manifest["materialized_count"] = len(materialized)
-    manifest["materialized_smoke_only"] = True
-    manifest["sft_smoke_sha256"] = sha256_file(output_path)
+    manifest["materialized_smoke_only"] = smoke_only
+    manifest["accepted_pre_cap_count"] = len(accepted)
+    manifest["accepted_pre_cap_strata"] = dict(sorted(accepted_strata.items()))
+    manifest["materialized_strata"] = dict(sorted(Counter(
+        f'{record["source_id"]}|{record["selection_status"]}' for record in materialized
+    ).items()))
+    manifest["materialized_unique_input_count"] = len(seen_inputs)
+    manifest["materialized_unique_query_count"] = len(seen_queries)
+    manifest["materialization_qmd_commit"] = materialization_commit
+    manifest["materialization_qmd_dirty"] = bool(materialization_dirty)
+    manifest["final_sft_eligible"] = not smoke_only
+    if smoke_only:
+        manifest["sft_smoke_sha256"] = sha256_file(output_paths[0])
+    else:
+        manifest["sft_sha256"] = sha256_file(output_paths[0])
+        manifest["sft_train_count"] = len(train)
+        manifest["sft_train_sha256"] = sha256_file(output_paths[1])
+        manifest["sft_validation_count"] = len(validation)
+        manifest["sft_validation_sha256"] = sha256_file(output_paths[2])
     atomic_json(run_dir / "run-manifest.json", manifest)
-    report_path = run_dir / "report.json"
     if report_path.exists():
-        report = json.loads(report_path.read_text(encoding="utf-8"))
         report["materialized_count"] = len(materialized)
-        report["sft_smoke_sha256"] = manifest["sft_smoke_sha256"]
+        report["accepted_pre_cap_count"] = len(accepted)
+        report["accepted_pre_cap_strata"] = manifest["accepted_pre_cap_strata"]
+        report["materialized_strata"] = manifest["materialized_strata"]
+        report["final_sft_eligible"] = not smoke_only
+        if smoke_only:
+            report["sft_smoke_sha256"] = manifest["sft_smoke_sha256"]
+        else:
+            report["sft_sha256"] = manifest["sft_sha256"]
+            report["sft_train_count"] = len(train)
+            report["sft_train_sha256"] = manifest["sft_train_sha256"]
+            report["sft_validation_count"] = len(validation)
+            report["sft_validation_sha256"] = manifest["sft_validation_sha256"]
         atomic_json(report_path, report)
 
 
