@@ -13,6 +13,16 @@ data/qmd_cleaned.jsonl
 data/qmd_expansion_cleaned.jsonl
 data/quality_report.txt
 
+# Public distillation / SFT release artifacts: converted corpora, QMD indexes,
+# teacher candidates, scored records and sealed splits. ~7GB / 143k files.
+# Provenance is carried by release manifests + SHA256, not by Git.
+# See docs/superpowers/specs/2026-08-15-qmd-completion-only-sft-training-spec.md §2.3
+data/public-distill-*/
+
+# Frozen independent evaluation benchmarks: corpora, queries, qrels, indexes and
+# run results. Same rule as above -- provenance lives in the evaluation manifest.
+data/public-eval-*/
+
 # Eval results
 evals/results_*.jsonl
 
