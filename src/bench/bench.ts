@@ -974,8 +974,18 @@ export async function runBenchmarkV2(
     const partialPath = `${resultsPath}.partial`;
     mkdirSync(dirname(resultsPath), { recursive: true });
     if (!existsSync(partialPath)) writeFileSync(partialPath, "", "utf8");
-    const queryResults = readFileSync(partialPath, "utf8")
-      .split("\n")
+    const partialLines = readFileSync(partialPath, "utf8").split("\n");
+    if (partialLines.at(-1) === "") {
+      partialLines.pop();
+    } else {
+      try {
+        JSON.parse(partialLines.at(-1)!);
+      } catch {
+        partialLines.pop();
+      }
+      writeFileSync(partialPath, `${partialLines.join("\n")}${partialLines.length ? "\n" : ""}`, "utf8");
+    }
+    const queryResults = partialLines
       .filter(line => line.trim())
       .map(line => JSON.parse(line) as CanonicalQueryResult);
     for (let index = 0; index < queryResults.length; index++) {
