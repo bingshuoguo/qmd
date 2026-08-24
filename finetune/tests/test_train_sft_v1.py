@@ -12,6 +12,7 @@ from dataset.public_distill_v1 import EOS_TOKEN_ID, PAD_TOKEN_ID, expected_promp
 
 FINETUNE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = FINETUNE_ROOT / "configs/sft-v1.yaml"
+V2_VH_CONFIG_PATH = FINETUNE_ROOT / "configs/sft-v2-vh-prompt-v1.yaml"
 
 
 class FakeParameter:
@@ -57,6 +58,21 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config["precision"]["gradient_checkpointing"])
         self.assertEqual(config["precision"]["seed"], 42)
         self.assertEqual(trainer_module.effective_batch_size(config["training"]), 16)
+
+    def test_v2_vh_config_targets_the_sealed_v2_release(self):
+        self.assertTrue(V2_VH_CONFIG_PATH.is_file())
+        config = trainer_module.load_config(V2_VH_CONFIG_PATH)
+
+        self.assertEqual(
+            config["release"]["manifest"],
+            "data/public-distill-v2-vh-prompt-v1/experiments/"
+            "public-main-v2-vh-prompt-v1/release-manifest.json",
+        )
+        self.assertEqual(config["release"]["release_id"], "public-distill-v2-vh-prompt-v1")
+        self.assertEqual(
+            config["release"]["experiment_id"], "public-main-v2-vh-prompt-v1"
+        )
+        self.assertEqual(config["model"]["max_seq_length"], 1024)
 
     def test_rejects_four_bit_loading(self):
         config = trainer_module.load_config(CONFIG_PATH)

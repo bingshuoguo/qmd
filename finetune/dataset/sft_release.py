@@ -8,6 +8,7 @@ train file and produces a leaked validation set.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ class Release:
     experiment_id: str
     prompt_version: str
     prompt_sha256: str
+    prompt_template: str
     train: ReleaseSplit
     validation: ReleaseSplit
 
@@ -59,6 +61,7 @@ class Release:
             "release_manifest_sha256": self.manifest_sha256,
             "prompt_version": self.prompt_version,
             "prompt_sha256": self.prompt_sha256,
+            "prompt_template": self.prompt_template,
             "train_path": str(self.train.path),
             "train_sha256": self.train.sha256,
             "train_rows": len(self.train.records),
@@ -154,13 +157,27 @@ def load_release(
         raise ValueError("manifest dataset.validation does not match the validation file")
 
     provenance = manifest.get("provenance", {})
+    prompt_template = provenance.get("prompt_template")
+    prompt_sha256 = provenance.get("prompt_sha256")
+    if not isinstance(prompt_template, str) or not prompt_template:
+        raise ValueError("release provenance.prompt_template must be a non-empty string")
+    if not isinstance(prompt_sha256, str):
+        raise ValueError("release provenance.prompt_sha256 must be a string")
+    observed_prompt_sha256 = hashlib.sha256(prompt_template.encode("utf-8")).hexdigest()
+    if observed_prompt_sha256 != prompt_sha256:
+        raise ValueError(
+            "release provenance.prompt_sha256 does not match prompt_template\n"
+            f"  manifest {prompt_sha256}\n"
+            f"  observed {observed_prompt_sha256}"
+        )
     return Release(
         manifest_path=manifest_path,
         manifest_sha256=sha256_file(manifest_path),
         release_id=manifest["release_id"],
         experiment_id=manifest["experiment_id"],
         prompt_version=provenance.get("prompt_version", ""),
-        prompt_sha256=provenance.get("prompt_sha256", ""),
+        prompt_sha256=prompt_sha256,
+        prompt_template=prompt_template,
         train=train,
         validation=validation,
     )
@@ -183,13 +200,22 @@ def assert_token_identities(tokenizer: Any) -> None:
         )
 
 
-def assert_prompt_template(records: list[dict[str, Any]]) -> None:
-    """Spec section 3.1: every stored prompt must match the frozen template."""
+def expected_prompt(prompt_template: str, query: str) -> str:
+    """Render the sealed user template into the pinned Qwen chat envelope."""
+    return (
+        "<|im_start|>user\n"
+        f"{prompt_template.replace('{query}', query)}"
+        "<|im_end|>\n<|im_start|>assistant\n"
+    )
+
+
+def assert_prompt_template(records: list[dict[str, Any]], prompt_template: str) -> None:
+    """Every stored prompt must match the sealed release template."""
     for record in records:
-        target = expected_prompt(record["query"])
+        target = expected_prompt(prompt_template, record["query"])
         if record["prompt"] != target:
             raise ValueError(
-                f"{record['input_id']}: stored prompt does not match the frozen v1 template"
+                f"{record['input_id']}: stored prompt does not match the sealed release template"
             )
 
 

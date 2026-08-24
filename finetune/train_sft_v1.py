@@ -312,7 +312,7 @@ def run_preflight(
 
     stats: dict[str, dict[str, int]] = {}
     for split in (release.train, release.validation):
-        assert_prompt_template(split.records)
+        assert_prompt_template(split.records, release.prompt_template)
         stats[split.name] = preflight_lengths(split.records, tokenizer, max_length)
     return release, stats
 
