@@ -1,0 +1,68 @@
+# Completion-only SFT config for the sealed production V2-VH prompt release.
+#
+# Keep model and optimization settings aligned with sft-v1.yaml. Changing them
+# defines a different experiment and requires a distinct run id.
+
+release:
+  manifest: data/public-distill-v2-vh-prompt-v1/experiments/public-main-v2-vh-prompt-v1/release-manifest.json
+  release_id: public-distill-v2-vh-prompt-v1
+  experiment_id: public-main-v2-vh-prompt-v1
+
+model:
+  model_id: Qwen/Qwen3-1.7B
+  revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+  dtype: bfloat16
+  load_in_4bit: false
+  full_finetuning: false
+  trust_remote_code: false
+  max_seq_length: 1024
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  num_train_epochs: 3
+  max_steps: -1
+  optim: adamw_torch
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+
+precision:
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  full_determinism: false
+  seed: 42
+  data_seed: 42
+
+checkpointing:
+  eval_strategy: epoch
+  save_strategy: epoch
+  save_total_limit: 3
+  save_only_model: false
+  load_best_model_at_end: false
+
+logging:
+  logging_strategy: steps
+  logging_steps: 5
+  report_to:
+    - tensorboard

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import tempfile
 import unittest
@@ -10,25 +11,48 @@ from pathlib import Path
 
 from dataset import sft_release
 from dataset.public_distill import atomic_json, atomic_jsonl, sha256_file
-from dataset.public_distill_v1 import EOS_TOKEN_ID, PAD_TOKEN_ID, expected_prompt
+from dataset.public_distill_v1 import (
+    EOS_TOKEN_ID,
+    PAD_TOKEN_ID,
+    USER_PROMPT_TEMPLATE,
+    expected_prompt,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_ROOT = REPO_ROOT / "data/public-distill-v1"
 MANIFEST = RELEASE_ROOT / "experiments/public-main-v1/release-manifest.json"
+V2_USER_PROMPT_TEMPLATE = (
+    "/no_think You generate retrieval expansions for a search query.\n\n"
+    "Return only newline-separated lines in exactly this format:\n"
+    "hyde: <one hypothetical document passage>\n"
+    "vec: <semantic search query>\n"
+    "vec: <optional second complementary semantic search query>\n\n"
+    "Search query: {query}"
+)
 
 
-def _record(index: int, split: str) -> dict:
+def _record(
+    index: int,
+    split: str,
+    *,
+    release_id: str = "public-distill-v1",
+    experiment_id: str = "public-main-v1",
+    prompt_template: str = USER_PROMPT_TEMPLATE,
+) -> dict:
     query = f"query {index}"
     return {
         "schema_version": "qmd-public-distill-v1",
-        "release_id": "public-distill-v1",
-        "experiment_id": "public-main-v1",
+        "release_id": release_id,
+        "experiment_id": experiment_id,
         "input_id": f"fiqa-train:{index}",
         "source_id": "fiqa-train",
         "qid": str(index),
         "query": query,
-        "prompt": expected_prompt(query),
+        "prompt": (
+            f"<|im_start|>user\n{prompt_template.replace('{query}', query)}"
+            "<|im_end|>\n<|im_start|>assistant\n"
+        ),
         "completion": f"lex: term {index}\nvec: about {index}<|im_end|>\n",
         "output": [["lex", f"term {index}"], ["vec", f"about {index}"]],
         "selected_candidate_index": 0,
@@ -39,14 +63,28 @@ def _record(index: int, split: str) -> dict:
     }
 
 
-def _build_release(directory: Path, train_count: int = 3, validation_count: int = 2) -> Path:
+def _build_release(
+    directory: Path,
+    train_count: int = 3,
+    validation_count: int = 2,
+    *,
+    release_id: str = "public-distill-v1",
+    experiment_id: str = "public-main-v1",
+    prompt_template: str = USER_PROMPT_TEMPLATE,
+) -> Path:
     """Write a minimal but structurally faithful release into `directory`."""
-    experiment_dir = directory / "experiments" / "public-main-v1"
+    experiment_dir = directory / "experiments" / experiment_id
     experiment_dir.mkdir(parents=True)
 
-    train = [_record(i, "train") for i in range(train_count)]
+    train = [
+        _record(i, "train", release_id=release_id, experiment_id=experiment_id,
+                prompt_template=prompt_template)
+        for i in range(train_count)
+    ]
     validation = [
-        _record(train_count + i, "validation") for i in range(validation_count)
+        _record(train_count + i, "validation", release_id=release_id,
+                experiment_id=experiment_id, prompt_template=prompt_template)
+        for i in range(validation_count)
     ]
     atomic_jsonl(experiment_dir / "sft-train.jsonl", train)
     atomic_jsonl(experiment_dir / "sft-validation.jsonl", validation)
@@ -54,7 +92,7 @@ def _build_release(directory: Path, train_count: int = 3, validation_count: int 
     def entry(name: str, rows: int) -> dict:
         path = experiment_dir / name
         return {
-            "path": f"experiments/public-main-v1/{name}",
+            "path": f"experiments/{experiment_id}/{name}",
             "bytes": path.stat().st_size,
             "rows": rows,
             "sha256": sha256_file(path),
@@ -65,11 +103,17 @@ def _build_release(directory: Path, train_count: int = 3, validation_count: int 
         manifest_path,
         {
             "schema_version": "qmd-public-distill-release-v1",
-            "release_id": "public-distill-v1",
-            "experiment_id": "public-main-v1",
+            "release_id": release_id,
+            "experiment_id": experiment_id,
             "status": "sealed",
             "final_sft_eligible": True,
-            "provenance": {"prompt_version": "qmd-student-expansion-v1", "prompt_sha256": "a" * 64},
+            "provenance": {
+                "prompt_version": "qmd-student-expansion-v1",
+                "prompt_sha256": hashlib.sha256(
+                    prompt_template.encode("utf-8")
+                ).hexdigest(),
+                "prompt_template": prompt_template,
+            },
             "dataset": {"train": train_count, "validation": validation_count},
             "core_artifacts": {
                 "sft-train.jsonl": entry("sft-train.jsonl", train_count),
@@ -101,6 +145,22 @@ class SyntheticReleaseTests(unittest.TestCase):
         self.assertEqual(len(release.train.records), 3)
         self.assertEqual(len(release.validation.records), 2)
         self.assertEqual(release.provenance()["train_rows"], 3)
+        self.assertIn("prompt_template", release.provenance())
+
+    def test_accepts_a_sealed_v2_prompt_template(self):
+        manifest = _build_release(
+            self.root / "v2",
+            release_id="public-distill-v2-vh-prompt-v1",
+            experiment_id="public-main-v2-vh-prompt-v1",
+            prompt_template=V2_USER_PROMPT_TEMPLATE,
+        )
+        release = sft_release.load_release(
+            manifest,
+            expected_release_id="public-distill-v2-vh-prompt-v1",
+            expected_experiment_id="public-main-v2-vh-prompt-v1",
+        )
+
+        sft_release.assert_prompt_template(release.train.records, release.prompt_template)
 
     def test_rejects_unsealed_release(self):
         self._mutate_manifest(status="draft")
@@ -112,6 +172,14 @@ class SyntheticReleaseTests(unittest.TestCase):
         self._mutate_manifest(final_sft_eligible=False)
 
         with self.assertRaisesRegex(ValueError, "not final_sft_eligible"):
+            sft_release.load_release(self.manifest)
+
+    def test_rejects_prompt_template_whose_declared_hash_drifted(self):
+        value = json.loads(self.manifest.read_text(encoding="utf-8"))
+        value["provenance"]["prompt_sha256"] = "0" * 64
+        atomic_json(self.manifest, value)
+
+        with self.assertRaisesRegex(ValueError, "prompt_sha256"):
             sft_release.load_release(self.manifest)
 
     def test_rejects_unexpected_release_id(self):
@@ -202,11 +270,13 @@ class PromptTemplateGuardTests(unittest.TestCase):
         records = [_record(0, "train")]
         records[0]["prompt"] = "<|im_start|>user\nold prompt<|im_end|>\n<|im_start|>assistant\n"
 
-        with self.assertRaisesRegex(ValueError, "does not match the frozen v1 template"):
-            sft_release.assert_prompt_template(records)
+        with self.assertRaisesRegex(ValueError, "does not match the sealed release template"):
+            sft_release.assert_prompt_template(records, USER_PROMPT_TEMPLATE)
 
     def test_accepts_frozen_prompts(self):
-        sft_release.assert_prompt_template([_record(i, "train") for i in range(3)])
+        sft_release.assert_prompt_template(
+            [_record(i, "train") for i in range(3)], USER_PROMPT_TEMPLATE
+        )
 
 
 @unittest.skipUnless(MANIFEST.is_file(), "v1 release is not present locally")
@@ -221,8 +291,8 @@ class RealReleaseTests(unittest.TestCase):
     def test_every_stored_prompt_matches_the_frozen_template(self):
         release = sft_release.load_release(MANIFEST)
 
-        sft_release.assert_prompt_template(release.train.records)
-        sft_release.assert_prompt_template(release.validation.records)
+        sft_release.assert_prompt_template(release.train.records, release.prompt_template)
+        sft_release.assert_prompt_template(release.validation.records, release.prompt_template)
 
 
 if __name__ == "__main__":
