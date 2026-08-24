@@ -16,13 +16,18 @@ texts/
 !CHANGELOG.md
 !skills/**/*.md
 !finetune/*.md
-# Documentation work products are local by default. Add an explicit `!path.md`
-# exception above only when a specific document is intentionally releasable.
+# Documentation work products are local by default.
 /docs/**/*.md
 /docs/*.md
+/docs/specs/
+/docs/superpowers/
 /docs/qmd-architecture-overview.html
 finetune/outputs/
 finetune/data/external/
 finetune/data/train/
+finetune/data/nf-freshstack-v1/
+finetune/benchmarks/public-eval/.eval-grid-logs/
+finetune/benchmarks/qmd-expansion-scifact-v1/raw-generations/
+finetune/qmd-adapters/
 .claude/
 .idea/
