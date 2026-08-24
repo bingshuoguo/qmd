@@ -41,20 +41,39 @@ if (!existsSync(rawPath)) {
 
 /**
  * Raw generations are keyed by query text because that is what the artifact
- * generator hands to the callback. Duplicate query text within one benchmark
- * would make the lookup ambiguous, so reject it rather than guess.
+ * generator hands to the callback. Some BEIR splits contain distinct qids with
+ * identical text, so each text maps to an input-order queue.
  */
-const rawByQuery = new Map<string, string>();
+const rawByQuery = new Map<string, Array<{
+  rawOutput: string;
+  generationError: string | null;
+  truncated: boolean;
+}>>();
 for (const line of readFileSync(rawPath, "utf8").split("\n")) {
   if (!line.trim()) continue;
-  const record = JSON.parse(line) as { query?: unknown; raw_output?: unknown };
+  const record = JSON.parse(line) as {
+    query?: unknown;
+    raw_output?: unknown;
+    generation_error?: unknown;
+    truncated?: unknown;
+  };
   if (typeof record.query !== "string" || typeof record.raw_output !== "string") {
     throw new Error(`${rawPath}: each row needs string query/raw_output`);
   }
-  if (rawByQuery.has(record.query)) {
-    throw new Error(`${rawPath}: duplicate query text, cannot map raw output unambiguously`);
+  if (record.generation_error !== undefined && record.generation_error !== null
+    && typeof record.generation_error !== "string") {
+    throw new Error(`${rawPath}: generation_error must be a string or null`);
   }
-  rawByQuery.set(record.query, record.raw_output);
+  if (record.truncated !== undefined && typeof record.truncated !== "boolean") {
+    throw new Error(`${rawPath}: truncated must be a boolean`);
+  }
+  const queue = rawByQuery.get(record.query) ?? [];
+  queue.push({
+    rawOutput: record.raw_output,
+    generationError: record.generation_error ?? null,
+    truncated: record.truncated ?? false,
+  });
+  rawByQuery.set(record.query, queue);
 }
 
 const summary = await generateExpansionArtifact({
@@ -62,11 +81,14 @@ const summary = await generateExpansionArtifact({
   runName: values.variant,
   force: values.force,
   generateRaw: async (query: string) => {
-    const raw = rawByQuery.get(query);
-    if (raw === undefined) {
+    const queue = rawByQuery.get(query);
+    const record = queue?.shift();
+    if (record === undefined) {
       throw new Error(`No raw generation for query: ${JSON.stringify(query)}`);
     }
-    return raw;
+    if (record.generationError !== null) throw new Error(record.generationError);
+    if (record.truncated) throw new Error("model output reached max token budget");
+    return record.rawOutput;
   },
 });
 

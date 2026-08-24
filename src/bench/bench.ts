@@ -17,10 +17,12 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -966,17 +968,34 @@ export async function runBenchmarkV2(
     const documentIdByPath = new Map(
       benchmark.documents.map(document => [document.path, document.doc_id]),
     );
-    const queryResults: CanonicalQueryResult[] = [];
-    let formatErrorCount = 0;
-    let generationErrorCount = 0;
-    let fallbackCount = 0;
-    let expansionPassCount = 0;
-    let retrievalErrorCount = 0;
+    const id = runId(options.run, options.model, options.only);
+    const resultsRelative = `runs/results/${id}.jsonl`;
+    const resultsPath = join(root, ...resultsRelative.split("/"));
+    const partialPath = `${resultsPath}.partial`;
+    mkdirSync(dirname(resultsPath), { recursive: true });
+    if (!existsSync(partialPath)) writeFileSync(partialPath, "", "utf8");
+    const queryResults = readFileSync(partialPath, "utf8")
+      .split("\n")
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line) as CanonicalQueryResult);
+    for (let index = 0; index < queryResults.length; index++) {
+      if (queryResults[index]!.qid !== benchmark.queries[index]?.qid) {
+        throw new Error(`Partial benchmark results are not a valid qid prefix: ${partialPath}`);
+      }
+    }
+    if (queryResults.length > benchmark.queries.length) {
+      throw new Error(`Partial benchmark results exceed query count: ${partialPath}`);
+    }
+    let formatErrorCount = queryResults.filter(r => r.expansion_status === "format_error").length;
+    let generationErrorCount = queryResults.filter(r => r.expansion_status === "generation_error").length;
+    let fallbackCount = queryResults.filter(r => r.fallback_used).length;
+    let expansionPassCount = queryResults.filter(r => r.expansion_status === "ok").length;
+    let retrievalErrorCount = queryResults.filter(r => r.retrieval_status === "error").length;
     const total = benchmark.queries.length;
     const runStartedAt = performance.now();
 
     reportBenchmarkProgress(onProgress, {
-      completed: 0,
+      completed: queryResults.length,
       total,
       elapsed_ms: 0,
       eta_ms: null,
@@ -985,7 +1004,7 @@ export async function runBenchmarkV2(
       error_count: 0,
     });
 
-    for (let queryIndex = 0; queryIndex < total; queryIndex++) {
+    for (let queryIndex = queryResults.length; queryIndex < total; queryIndex++) {
       const query = benchmark.queries[queryIndex]!;
       const expansionRecord = recordsByQid.get(query.qid);
       if (expansionRecord?.status === "ok") expansionPassCount++;
@@ -1073,6 +1092,11 @@ export async function runBenchmarkV2(
             : [],
         });
       }
+      appendFileSync(
+        partialPath,
+        `${JSON.stringify(queryResults[queryResults.length - 1])}\n`,
+        "utf8",
+      );
       const completed = queryIndex + 1;
       const elapsedMs = performance.now() - runStartedAt;
       reportBenchmarkProgress(onProgress, {
@@ -1105,15 +1129,7 @@ export async function runBenchmarkV2(
         ...averageCanonicalMetrics(successfulMetrics, benchmark.manifest.cutoffs),
         ...expansionRates,
       } satisfies BenchmarkRunMetrics;
-    const id = runId(options.run, options.model, options.only);
-    const resultsRelative = `runs/results/${id}.jsonl`;
-    const resultsPath = join(root, ...resultsRelative.split("/"));
-    mkdirSync(dirname(resultsPath), { recursive: true });
-    writeFileSync(
-      resultsPath,
-      `${queryResults.map(result => JSON.stringify(result)).join("\n")}\n`,
-      "utf8",
-    );
+    renameSync(partialPath, resultsPath);
     const indexManifestBytes = readFileSync(join(root, "index-manifest.json"));
     const run: BenchmarkRunV2 = {
       run_id: id,
