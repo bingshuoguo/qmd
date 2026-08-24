@@ -43,7 +43,6 @@
     "distill:report": "node --import tsx finetune/benchmarks/distill/report.ts",
     "public-distill:prepare": "node --import tsx finetune/benchmarks/public-distill/prepare.ts",
     "public-distill:prepare-main-pool": "node --import tsx finetune/benchmarks/public-distill/prepare-main-pool.ts",
-    "public-distill:repair-fiqa-titles": "node --import tsx finetune/benchmarks/public-distill/repair-fiqa-titles.ts",
     "public-distill:prepare-smoke-index": "node --import tsx finetune/benchmarks/public-distill/prepare-smoke-index.ts",
     "public-distill:generate": "node --env-file=.env.distill.deepseek-json4-v2.local --import tsx finetune/benchmarks/public-distill/generate.ts",
     "public-distill:score": "node --import tsx finetune/benchmarks/public-distill/score.ts",
