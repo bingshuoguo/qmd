@@ -85,6 +85,11 @@ def generate(
 ) -> list[dict[str, Any]]:
     import torch
 
+    eos_token_id = tokenizer.eos_token_id
+    if eos_token_id is None or eos_token_id == []:
+        raise ValueError("EOS-aware generation statistics require an EOS token ID")
+    eos_ids = {eos_token_id} if isinstance(eos_token_id, int) else set(eos_token_id)
+
     records: list[dict[str, Any]] = []
     for start in range(0, len(queries), batch_size):
         batch = queries[start : start + batch_size]
@@ -101,19 +106,36 @@ def generate(
                 max_new_tokens=GENERATION["max_new_tokens"],
                 use_cache=GENERATION["use_cache"],
                 pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+                eos_token_id=eos_token_id,
             )
 
         prompt_length = inputs["input_ids"].shape[1]
         for index, item in enumerate(batch):
-            generated = outputs[index][prompt_length:]
-            truncated = len(generated) >= GENERATION["max_new_tokens"]
+            generated = outputs[index][prompt_length:].tolist()
+            eos_index = next(
+                (i for i, token_id in enumerate(generated) if token_id in eos_ids),
+                None,
+            )
+            if eos_index is not None:
+                # Count the terminal EOS, but never the batch padding after it.
+                # EOS at max_new_tokens is a normal stop, not a truncation.
+                generated = generated[:eos_index + 1]
+                finish_reason = "eos"
+            elif len(generated) >= GENERATION["max_new_tokens"]:
+                finish_reason = "length"
+            else:
+                finish_reason = "unknown"
             records.append({
                 "qid": item["qid"],
                 "query": item["query"],
                 "raw_output": tokenizer.decode(generated, skip_special_tokens=True),
                 "generated_tokens": int(len(generated)),
-                "truncated": bool(truncated),
+                "finish_reason": finish_reason,
+                "truncated": finish_reason == "length",
+                "generation_error": (
+                    "generation stopped without EOS before the token budget"
+                    if finish_reason == "unknown" else None
+                ),
             })
         print(
             f"  {min(start + batch_size, len(queries))}/{len(queries)}",
@@ -167,6 +189,9 @@ def main() -> int:
         "prompt_version": PROMPT_VERSION,
         "prompt_sha256": prompt_sha256(),
         "generation": GENERATION,
+        "generation_statistics_version": "eos-aware-v1",
+        "generated_tokens_semantics": "includes terminal EOS; excludes post-EOS padding",
+        "eos_token_id": tokenizer.eos_token_id,
         "batch_size": args.batch_size,
         "queries": len(queries),
         "truncated": sum(record["truncated"] for record in records),
