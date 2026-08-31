@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -75,7 +76,10 @@ def _copy_existing_source(source_id: str, source: Path, output: Path, config: Qu
     collection_root = (source / str(profile["collection_root"])).resolve()
     if not collection_root.is_dir():
         raise ValueError(f"{source_id}: collection root is missing: {collection_root}")
-    shutil.copytree(collection_root, corpus_output)
+    corpus_output.parent.mkdir(parents=True, exist_ok=True)
+    corpus_output.symlink_to(
+        os.path.relpath(collection_root, corpus_output.parent), target_is_directory=True
+    )
     profile.update(
         {
             "profile_id": "qmd-opd-teacher-qualification-v1",
