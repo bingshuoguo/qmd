@@ -1,0 +1,8 @@
+{"family_id":"nfcorpus:n1","qid":"n1","query":"nutrition and heart health","sample_key":"nfcorpus:n1","sft_release_ids":[],"sft_usage":"fresh","source_id":"nfcorpus","split_role":"synthetic_dry_run"}
+{"family_id":"nfcorpus:n2","qid":"n2","query":"benefits of daily exercise","sample_key":"nfcorpus:n2","sft_release_ids":[],"sft_usage":"fresh","source_id":"nfcorpus","split_role":"synthetic_dry_run"}
+{"family_id":"fiqa:f1","qid":"f1","query":"how do bonds react to interest rates","sample_key":"fiqa:f1","sft_release_ids":[],"sft_usage":"fresh","source_id":"fiqa","split_role":"synthetic_dry_run"}
+{"family_id":"fiqa:f2","qid":"f2","query":"what is dividend yield","sample_key":"fiqa:f2","sft_release_ids":[],"sft_usage":"fresh","source_id":"fiqa","split_role":"synthetic_dry_run"}
+{"family_id":"freshstack:s1","qid":"s1","query":"python sort dictionary by value","sample_key":"freshstack:s1","sft_release_ids":[],"sft_usage":"fresh","source_id":"freshstack","split_role":"synthetic_dry_run"}
+{"family_id":"freshstack:s2","qid":"s2","query":"javascript async error handling","sample_key":"freshstack:s2","sft_release_ids":[],"sft_usage":"fresh","source_id":"freshstack","split_role":"synthetic_dry_run"}
+{"family_id":"scifact:c1","qid":"c1","query":"vitamin d affects bone density","sample_key":"scifact:c1","sft_release_ids":[],"sft_usage":"fresh","source_id":"scifact","split_role":"synthetic_dry_run"}
+{"family_id":"scifact:c2","qid":"c2","query":"smoking increases cardiovascular risk","sample_key":"scifact:c2","sft_release_ids":[],"sft_usage":"fresh","source_id":"scifact","split_role":"synthetic_dry_run"}
