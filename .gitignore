@@ -8,6 +8,7 @@ package-lock.json
 .DS_Store
 archive/
 texts/
+artifacts/
 .cursor/
 .github/copilot/
 *.md
