@@ -15,6 +15,7 @@ from .contracts import (
     PROMPT_SHA256,
     PROMPT_VERSION,
     QualificationConfig,
+    REPO_ROOT,
     atomic_json,
     atomic_jsonl,
     load_config,
@@ -74,15 +75,19 @@ def _copy_existing_source(source_id: str, source: Path, output: Path, config: Qu
 
     profile = yaml.safe_load((source / "retrieval-profile.yaml").read_text(encoding="utf-8"))
     collection_root = (source / str(profile["collection_root"])).resolve()
+    if source_id == "fiqa" and not collection_root.is_dir():
+        collection_root = REPO_ROOT / "finetune/data/public-distill-v0/prepared/fiqa-train/corpus"
     if not collection_root.is_dir():
         raise ValueError(f"{source_id}: collection root is missing: {collection_root}")
     corpus_output.parent.mkdir(parents=True, exist_ok=True)
     corpus_output.symlink_to(
         os.path.relpath(collection_root, corpus_output.parent), target_is_directory=True
     )
+    benchmark_id = yaml.safe_load((benchmark_output / "benchmark.yaml").read_text(encoding="utf-8"))["benchmark_id"]
     profile.update(
         {
             "profile_id": "qmd-opd-teacher-qualification-v1",
+            "collection_name": benchmark_id,
             "collection_root": f"../../corpora/{source_id}",
             "embedding_model": config.retrieval.embedding_model,
             "reranker_model": None,
@@ -103,7 +108,7 @@ def _copy_existing_source(source_id: str, source: Path, output: Path, config: Qu
     counts = audit_benchmark_rows(queries, documents, qrels)
     return {
         "source_id": source_id,
-        "benchmark_id": yaml.safe_load((benchmark_output / "benchmark.yaml").read_text(encoding="utf-8"))["benchmark_id"],
+        "benchmark_id": benchmark_id,
         "source_path": str(source),
         "source_sha256": _directory_manifest_hash(source, CANONICAL_FILES),
         "counts": counts,
@@ -148,14 +153,14 @@ def _write_scifact(config: QualificationConfig, output: Path, usage: dict[str, l
     selected = select_families(family_by_qid, seen_by_qid, target=200, seed=42)
     selected_set = set(selected)
     qrels = [(qid, doc_id) for qid, doc_id in all_qrels if qid in selected_set]
-    relevant_docs = sorted({doc_id for _, doc_id in qrels}, key=lambda item: item.encode())
+    document_ids = sorted(corpus, key=lambda item: item.encode())
     benchmark = output / "benchmarks/scifact"
     corpus_root = output / "corpora/scifact"
     benchmark.mkdir(parents=True)
     corpus_root.mkdir(parents=True)
     query_rows = [{"qid": qid, "query": queries[qid]} for qid in selected]
     document_rows: list[dict[str, str]] = []
-    for doc_id in relevant_docs:
+    for doc_id in document_ids:
         document = corpus[doc_id]
         filename = f"{doc_id}.md"
         body = f"# {document['title']}\n\n{document['text']}\n" if document["title"] else f"{document['text']}\n"
@@ -291,6 +296,8 @@ def check_inputs(config: QualificationConfig) -> dict[str, Any]:
                 raise ValueError(f"{source_id}: missing canonical file {root / name}")
         profile = yaml.safe_load((root / "retrieval-profile.yaml").read_text(encoding="utf-8"))
         collection_root = (root / str(profile["collection_root"])).resolve()
+        if source_id == "fiqa" and not collection_root.is_dir():
+            collection_root = REPO_ROOT / "finetune/data/public-distill-v0/prepared/fiqa-train/corpus"
         if not collection_root.is_dir():
             raise ValueError(f"{source_id}: missing collection root {collection_root}")
         counts = audit_benchmark_rows(
@@ -312,7 +319,7 @@ def check_inputs(config: QualificationConfig) -> dict[str, Any]:
     if not relevant_docs <= set(corpus):
         raise ValueError("SciFact selected qrels reference missing documents")
     result["scifact"] = {
-        "counts": {"queries": len(selected), "documents": len(relevant_docs), "qrels": sum(qid in set(selected) for qid, _ in qrels)},
+        "counts": {"queries": len(selected), "documents": len(corpus), "qrels": sum(qid in set(selected) for qid, _ in qrels)},
         "family_count": family_audit["family_count"],
         "sft_seen_queries": sum(qid in seen_by_qid for qid in selected),
     }
