@@ -34,11 +34,10 @@ def load_cuda_model(model: ModelConfig) -> tuple[Any, Any]:
 
     if not torch.cuda.is_available():
         raise RuntimeError("formal generation requires CUDA; CPU/MPS fallback is forbidden")
-    if not model.revision:
+    local_model = Path(model.model_id).is_dir()
+    if not model.revision and not local_model:
         raise ValueError("formal generation requires an immutable model revision")
-    tokenizer = AutoTokenizer.from_pretrained(
-        model.model_id, revision=model.revision, trust_remote_code=False
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model.model_id, revision=model.revision, trust_remote_code=False)
     tokenizer.padding_side = "left"
     loaded = AutoModelForCausalLM.from_pretrained(
         model.model_id,
