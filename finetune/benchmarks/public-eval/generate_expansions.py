@@ -29,11 +29,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from dataset.public_distill import atomic_json, atomic_jsonl, sha256_file
 from dataset.public_distill_v1 import (
-    PROMPT_VERSION,
+    PROMPT_VERSION as V1_PROMPT_VERSION,
     TOKENIZER_REVISION,
-    expected_prompt,
-    prompt_sha256,
+    expected_prompt as v1_expected_prompt,
+    prompt_sha256 as v1_prompt_sha256,
 )
+
+# === Prompt registry ====================================================
+
+V2_VH_USER_TEMPLATE = (
+    "/no_think You generate retrieval expansions for a search query.\n"
+    "Return only newline-separated lines in exactly this format:\n"
+    "hyde: <one hypothetical document passage>\n"
+    "vec: <semantic search query>\n"
+    "vec: <optional second complementary semantic search query>\n"
+    "Query: {query}"
+)
+
+V2A_USER_TEMPLATE = (
+    "/no_think You generate retrieval expansions for a search query.\n"
+    "Return exactly one hyde line followed by one or two vec lines.\n"
+    "Target 20-120 words for HyDE; use fewer for a simple query.\n"
+    "Preserve entities, versions, numbers, constraints, negation, comparison, and intent.\n"
+    "Do not invent unsupported facts, causal claims, laws, statistics, or definitions.\n"
+    "Make Vec queries complementary rather than duplicates.\n"
+    "Query: {query}"
+)
+
+PROMPT_REGISTRY = {
+    "v1": {
+        "version": V1_PROMPT_VERSION,
+        "sha256": v1_prompt_sha256(),
+    },
+    "v2-vh": {
+        "version": "qmd-student-expansion-v2-vh-v1",
+        "template": V2_VH_USER_TEMPLATE,
+        "sha256": hashlib.sha256(V2_VH_USER_TEMPLATE.encode("utf-8")).hexdigest(),
+    },
+    "v2a-pareto": {
+        "version": "qmd-student-expansion-v3-vh-pareto-v1",
+        "template": V2A_USER_TEMPLATE,
+        "sha256": hashlib.sha256(V2A_USER_TEMPLATE.encode("utf-8")).hexdigest(),
+    },
+}
+
+
+def expected_prompt(query: str, prompt_version: str = "v1") -> str:
+    """Render the Qwen chat envelope for a given prompt version."""
+    if prompt_version == "v1":
+        return v1_expected_prompt(query)
+    template = PROMPT_REGISTRY[prompt_version]["template"]
+    user_content = template.replace("{query}", query)
+    return f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+
+
+def prompt_sha256(prompt_version: str = "v1") -> str:
+    return PROMPT_REGISTRY[prompt_version]["sha256"]
+
+
+def prompt_version_string(prompt_version: str = "v1") -> str:
+    return PROMPT_REGISTRY[prompt_version]["version"]
 
 # Spec section 16.  Frozen for both arms.
 GENERATION = {
@@ -69,19 +124,26 @@ def load_model(model_path: str, revision: str | None, adapter: Path | None) -> t
     # continuations start at the wrong offset.
     tokenizer.padding_side = "left"
 
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
     model = AutoModelForCausalLM.from_pretrained(
-        model_path, revision=revision, dtype=torch.bfloat16, device_map="auto"
+        model_path, revision=revision, dtype=torch.bfloat16
     )
     if adapter is not None:
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, str(adapter))
+    model = model.to(device)
     model.eval()
     return model, tokenizer
 
 
 def generate(
-    model: Any, tokenizer: Any, queries: list[dict[str, str]], batch_size: int
+    model: Any, tokenizer: Any, queries: list[dict[str, str]], batch_size: int,
+    prompt_version: str = "v1",
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -93,7 +155,7 @@ def generate(
     records: list[dict[str, Any]] = []
     for start in range(0, len(queries), batch_size):
         batch = queries[start : start + batch_size]
-        prompts = [expected_prompt(item["query"]) for item in batch]
+        prompts = [expected_prompt(item["query"], prompt_version) for item in batch]
         inputs = tokenizer(
             prompts, return_tensors="pt", padding=True, add_special_tokens=False
         ).to(model.device)
@@ -153,6 +215,8 @@ def main() -> int:
     parser.add_argument("--revision", default=TOKENIZER_REVISION)
     parser.add_argument("--adapter", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--prompt-version", default="v1",
+                        choices=["v1", "v2-vh", "v2a-pareto"])
     args = parser.parse_args()
 
     benchmark_dir = args.benchmark.resolve()
@@ -171,7 +235,7 @@ def main() -> int:
     print(f"{args.variant}: {len(queries)} queries from {benchmark_dir.name}", file=sys.stderr)
 
     model, tokenizer = load_model(args.model, args.revision, args.adapter)
-    records = generate(model, tokenizer, queries, args.batch_size)
+    records = generate(model, tokenizer, queries, args.batch_size, args.prompt_version)
 
     atomic_jsonl(output_path, records)
     atomic_json(manifest_path, {
@@ -186,8 +250,8 @@ def main() -> int:
             if args.adapter and (args.adapter / "adapter_model.safetensors").is_file()
             else None
         ),
-        "prompt_version": PROMPT_VERSION,
-        "prompt_sha256": prompt_sha256(),
+        "prompt_version": prompt_version_string(args.prompt_version),
+        "prompt_sha256": prompt_sha256(args.prompt_version),
         "generation": GENERATION,
         "generation_statistics_version": "eos-aware-v1",
         "generated_tokens_semantics": "includes terminal EOS; excludes post-EOS padding",
