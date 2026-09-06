@@ -1,69 +1,69 @@
-# SFT-VH V2-A Pareto Data Reselection Design
+# SFT-VH V2-A Pareto 数据重选设计
 
-Date: 2026-08-29 (Asia/Shanghai)
+日期：2026-08-29（Asia/Shanghai）
 
-Status: approved design
+状态：已批准设计
 
-Scope: construct and evaluate the next QMD `hyde + vec` completion-only SFT release without changing the deployed expansion protocol or introducing new teacher data in the first experiment.
+范围：在不改变线上 expansion 协议、且第一阶段不引入新 teacher 数据的前提下，构造并评估下一版 QMD `hyde + vec` completion-only SFT release。
 
-## 1. Decision Summary
+## 1. 决策摘要
 
-SFT-VH V2-A is a controlled data-reselection experiment. It reuses the existing teacher candidate text, recomputes retrieval metrics under a clean frozen QMD environment, admits only strict Pareto winners, adds semantic quality as a release gate, and trains the same pinned Qwen3-1.7B LoRA configuration with a length-aware prompt.
+SFT-VH V2-A 是一次受控的数据重选实验。它复用现有 teacher 候选文本，在干净、冻结的 QMD 环境下重新计算检索指标，只准入在全部五指标（Recall@10、Recall@20、Recall@30、MRR@10、nDCG@10）上不退化且至少一个指标严格提升的 Pareto winner，将语义质量作为 release gate，在相同的 pinned Qwen3-1.7B LoRA 配置上训练。
 
-The experiment optimizes general retrieval quality rather than a single benchmark or a single cutoff. The target is to improve equal-weight macro Recall@30, MRR@10, and nDCG@10 while preserving Recall@10 and Recall@20.
+该实验优化的是通用检索质量，而不是单个 benchmark 或单个 cutoff。目标是在保持 Recall@10 和 Recall@20 的同时，提升五数据集等权宏平均的 Recall@30、MRR@10 和 nDCG@10。
 
-The approved sequence is:
+已批准的执行顺序如下：
 
-1. V2-A: reuse and reselect existing candidates.
-2. V2-B: add FreshStack, new NFCorpus candidates, or another teacher only if V2-A passes its promotion gates.
+1. V2-A：复用并重新选择现有候选。
+2. V2-B：只有 V2-A 通过晋级门槛后，才增加 FreshStack、新 NFCorpus 候选或其他 teacher。
 
-Webmasters remains a stress test. It is reported independently and does not enter the primary macro or independently veto a generally useful expansion model.
+Webmasters 保留为 stress test。它单独报告，不进入 primary macro，也不能单独否决一个具有通用价值的 expansion 模型。
 
-## 2. Why V2-A Is Necessary
+## 2. 为什么需要 V2-A
 
-The current `public-main-v2-vh-prompt-v1` adapter established that SFT can improve QMD retrieval:
+当前 `public-main-v2-vh-prompt-v1` adapter 已经证明 SFT 可以改善 QMD 检索：
 
-- Recall@30 improved by 1.50 percentage points with a positive paired-bootstrap confidence interval.
-- MRR@10 improved by 1.48 percentage points with a positive confidence interval.
-- nDCG@10 improved by 0.64 percentage points with a positive confidence interval.
-- Recall@10 and Recall@20 did not improve significantly.
+- Recall@30 提升 1.50 个百分点，paired bootstrap 置信区间显著为正。
+- MRR@10 提升 1.48 个百分点，置信区间显著为正。
+- nDCG@10 提升 0.64 个百分点，置信区间显著为正。
+- Recall@10 和 Recall@20 没有显著提升。
 
-Its supervision set nevertheless has four correctable weaknesses:
+但它的监督数据存在四类可修复问题：
 
-1. The winner rule optimizes `R@20 > raw`, permits nDCG@10 to fall by 0.02, and does not guard Recall@30 or MRR@10. Among the 1,017 SFT targets, 36 lower Recall@30, 47 lower MRR@10, and 65 lower nDCG@10 relative to raw retrieval.
-2. A 200-record semantic audit reported 20 failures and 6 uncertain records. Those records were diagnostic findings rather than admission failures and remained in the SFT release.
-3. The source distribution is dominated by NFCorpus: 728 of 1,017 records. SciFact contributes only 2 records.
-4. The student generates longer output than its targets. Training HyDE averages about 82 words, while held-out SFT generation averages about 113 words and has a 608-word maximum.
+1. 现有 winner rule 优化 `R@20 > raw`，允许 nDCG@10 下降 0.02，且没有保护 Recall@30 和 MRR@10。在 1,017 条 SFT target 中，相对 raw retrieval 有 36 条降低 Recall@30、47 条降低 MRR@10、65 条降低 nDCG@10。
+2. 200 条语义抽检中有 20 条 fail、6 条 uncertain。这些结果仅作为诊断，没有阻止对应记录进入 SFT release。
+3. 数据来源被 NFCorpus 主导：1,017 条中有 728 条来自 NFCorpus，而 SciFact 只有 2 条。
+4. Student 生成结果明显长于训练 target。训练 HyDE 平均约 82 词，held-out SFT 生成的 HyDE 平均约 113 词，最大达到 608 词。
 
-The evidence supports improving supervision quality before switching to preference optimization or online reinforcement learning.
+这些证据支持先改善监督质量，再考虑 preference optimization 或 online reinforcement learning。
 
-## 3. Goals and Non-Goals
+## 3. 目标与非目标
 
-### 3.1 Goals
+### 3.1 目标
 
-- Produce 1,000 to 2,000 final training records plus a separate validation/retrieval-dev split of approximately 10% of the training count.
-- Admit only candidates that do not regress any tracked per-query retrieval metric.
-- Make entity drift, lost constraints, lost negation, unsupported facts, and ambiguous over-interpretation release-blocking failures.
-- Preserve scarce eligible source data without duplicate sampling.
-- Keep data, prompt, training, retrieval, and evaluation provenance reproducible.
-- Separate prompt-only gains from gains caused by the new supervision release.
-- Select checkpoints by retrieval quality, not validation loss.
+- 产出 1,000–2,000 条最终训练记录，并额外建立约为训练集 10% 的独立 validation/retrieval-dev split。
+- 只准入在全部五指标（Recall@10、Recall@20、Recall@30、MRR@10、nDCG@10）上不退化且至少一个指标严格提升的候选。
+- 将实体漂移、约束丢失、否定丢失、无依据事实和歧义过度解释设为阻塞 release 的错误。
+- 保留稀缺来源的合规数据，不通过重复采样补足数量。
+- 保证数据、prompt、训练、检索和评估 provenance 可复现。
+- 分离仅由 prompt 带来的收益与新监督 release 带来的收益。
+- 按检索质量而不是 validation loss 选择 checkpoint。
 
-### 3.2 Non-Goals
+### 3.2 非目标
 
-- Do not change the runtime `hyde + vec` output protocol.
-- Do not teach a `no expansion` or routing action in V2-A.
-- Do not introduce FreshStack or newly generated teacher candidates in V2-A.
-- Do not use qualified ties, trade-offs, or failed candidates as SFT positives.
-- Do not implement DPO, ORPO, GRPO, or PPO in this experiment.
-- Do not claim multilingual quality; V2-A training and primary evidence are English-language.
-- Do not make a production release decision from training loss or protocol validity alone.
+- V2-A 不改变 runtime `hyde + vec` 输出协议。
+- V2-A 不训练 `no expansion` 或 routing action。
+- V2-A 不引入 FreshStack 或新生成的 teacher 候选。
+- 不将 qualified tie、trade-off 或失败候选作为 SFT 正样本。
+- 本实验不实现 DPO、ORPO、GRPO 或 PPO。
+- 不宣称多语言质量；V2-A 的训练和 primary evidence 均为英文。
+- 不根据 training loss 或协议通过率单独作出生产发布决策。
 
-## 4. Experiment Identity
+## 4. 实验标识
 
-The existing experiment already uses `v2-vh` identifiers. V2-A must use new immutable IDs rather than overwrite or ambiguously extend that release.
+现有实验已经使用 `v2-vh` 标识。V2-A 必须使用新的不可变 ID，不能覆盖或含糊地扩展现有 release。
 
-Approved identity pattern:
+批准的命名模式如下：
 
 ```text
 source release:  public-distill-v3-vh-pareto
@@ -72,26 +72,109 @@ experiment:      public-main-v3-vh-pareto-prompt-v1
 prompt version:  qmd-student-expansion-v3-vh-pareto-v1
 ```
 
-Any change to candidate input hashes, retrieval profile, admission policy, semantic decisions, split membership, prompt bytes, or materialized JSONL requires a new release or experiment ID.
+候选输入 hash、retrieval profile、准入策略、语义决定、split 成员、prompt 字节或物化 JSONL 中的任何一项发生变化，都必须使用新的 release ID 或 experiment ID。
 
-## 5. Candidate Inputs
+## 5. 候选输入
 
-V2-A reuses candidate text from the existing V2-VH projection and native-generation artifacts. Previous winner labels and previous retrieval metrics are diagnostic inputs only. Formal admission requires rescoring every candidate under the newly frozen clean environment.
+V2-A 复用现有 V2-VH projection 和 native generation artifact 中的候选文本。旧 winner label 和旧检索指标只作为诊断输入。正式准入必须在新冻结的干净环境中重新评分全部候选。
 
-The input manifest must record:
+当前冻结候选池包含 6,223 个 query-level 记录，以 `input_id` 计恰好对应 6,223 个唯一 query；每个 query 包含 3–4 个 source candidate，共计 24,869 个 source candidate。V2-A 必须先对这 24,869 个 source candidate 逐一执行确定性的裁切与规范化，再对 Contract-valid canonical candidate 执行 retrieval rescoring，最后以 6,223 个 query group 为单位执行 Pareto 准入和 winner selection。这里的 6,223 是候选选择阶段的 query 数，不是最终 SFT 训练记录数；最终训练数据仍由通过全部准入流程的 selected candidate 构成，并遵守 1,000–2,000 条训练记录的规模要求。
 
-- source artifact paths, row counts, byte sizes, and SHA-256 hashes;
-- unique query and candidate counts;
-- candidate generation provider, model revision, prompt version, parameters, and provenance;
-- source dataset, split, qid, input_id, sample_key, and family/group identifier when available;
-- exact raw candidate output and parsed canonical output;
-- duplicate and overlap reports against all primary held-out queries.
+冻结候选池按来源数据集分布如下：
 
-Gold documents and qrels must never enter teacher prompts. They are used only by the frozen retrieval scorer.
+| 来源数据集 | Query 数 | Query 占比 | Candidate 数 |
+| --- | ---: | ---: | ---: |
+| `nfcorpus-train-dev` | 2,914 | 46.83% | 11,656 |
+| `cqadup-unix` | 884 | 14.21% | 3,524 |
+| `cqadup-programmers` | 866 | 13.92% | 3,457 |
+| `scifact-train` | 809 | 13.00% | 3,236 |
+| `fiqa-train` | 750 | 12.05% | 2,996 |
+| **合计** | **6,223** | **100.00%** | **24,869** |
 
-## 6. Output Contract
+各来源占比独立四舍五入到小数点后两位，分项显示值之和可能与 100.00% 相差 0.01 个百分点。
 
-Each candidate and each student completion has this protocol:
+NFCorpus 占当前 query pool 的 46.83%，是最大的候选来源；其余四个来源各占约 12%–14%。这张表描述的是 V2-A 重新选择之前的输入候选池，不是最终 SFT train/validation 分布。最终来源分布必须在严格 Pareto、语义准入、去重和 split 完成后重新统计；稀缺来源的合规记录全部保留，不为了满足预设比例而丢弃，也不通过重复采样补足数量。
+
+### 5.1 数据集来源与本地位置
+
+五个 source 均来自 BEIR 发布的公开数据归档，原始数据只用于构造 query、corpus 和 qrels；teacher prompt 只接收 query，不接收 gold document 或 qrels。
+
+| `source_id` | 上游数据与使用范围 | 本地标准化数据位置 |
+| --- | --- | --- |
+| `fiqa-train` | BEIR FiQA，`train` split，金融问答检索 | `finetune/data/public-distill-v0/prepared/fiqa-train/` |
+| `cqadup-programmers` | BEIR CQADupStack，`programmers` domain 的 upstream `test` split，编程问答去重检索 | `finetune/data/public-distill-v0/prepared/cqadup-programmers/` |
+| `cqadup-unix` | BEIR CQADupStack，`unix` domain 的 upstream `test` split，Unix 问答去重检索 | `finetune/data/public-distill-v0/prepared/cqadup-unix/` |
+| `nfcorpus-train-dev` | BEIR NFCorpus，合并 `train` 和 `dev` split，生物医学与健康信息检索 | `finetune/data/public-distill-v0/prepared/qmd-distill-public-v0-nfcorpus-train-dev/` |
+| `scifact-train` | BEIR SciFact，`train` split，科学论断与论文证据检索 | `finetune/data/public-distill-v0/prepared/qmd-distill-public-v0-scifact-train/` |
+
+CQADupStack 的 `test` 是上游数据包内的 split 名称。在本实验中，Programmers 和 Unix domain 被明确用作 SFT 候选来源；Android 和 Webmasters 等独立 domain 保留在 held-out/stress evaluation，不与这两个训练来源混用。所有 source 仍必须通过 normalized-query overlap 和 family/group leakage 检查。
+
+每个标准化目录包含 `queries.jsonl`、`documents.jsonl`、`qrels.tsv`、`source-manifest.json`、`leakage-report.json`、`benchmark.yaml` 和 `retrieval-profile.yaml` 等可复现 artifact。上游归档及当前位置如下：
+
+- FiQA：`finetune/data/public-distill-v0/archives/fiqa.zip`，来源 URL 为 `https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/fiqa.zip`；
+- NFCorpus：`finetune/data/public-distill-v0/archives/nfcorpus.zip`，来源 URL 为 `https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip`；
+- SciFact：`finetune/data/public-distill-v0/archives/scifact.zip`，来源 URL 为 `https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip`；
+- CQADupStack：来源 URL 为 `https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/cqadupstack.zip`。本地原压缩包已于 2026-08-31 为缩减仓库体积而删除，但上述两个 prepared 目录仍完整保留；恢复方法和归档 SHA-256 记录在 `finetune/data/public-distill-v0/archives/RESTORE.md`。
+
+候选数据从标准化 source 进入 V2-A 的 lineage 为：
+
+1. FiQA、CQADup Programmers 和 CQADup Unix 的 2,500 个 query 先组成 `finetune/data/public-distill-v0/prepared/pool-main.jsonl`，其旧 teacher 生成结果位于 `finetune/data/public-distill-v0/experiments/public-main-v0/candidates.jsonl`；V2-VH 投影后的 9,977 个 candidate 位于 `finetune/data/public-distill-v0/experiments/v2-vh/projection.jsonl`。
+2. NFCorpus 和 SciFact 的 3,723 个 query 使用 V2-VH native generation，共生成 14,892 个 candidate，位于 `finetune/data/public-distill-v0/experiments/v2-vh/native-candidates.jsonl`。
+3. 两路 candidate 按 `input_id` 汇总为 6,223 个 query group 和 24,869 个 source candidate；当前统一 query-level ledger 位于 `finetune/data/public-distill-v0/experiments/v2-vh/selected-v2-vh.jsonl`。V2-A 将从这些不可变 source candidate 重新物化 canonical candidate 并构造新的 selection ledger，不覆盖现有 V2-VH artifact。
+
+### 5.2 候选裁切与规范化
+
+V2-A 的标准训练 target 为恰好一条 HyDE，加一条或两条 Vec；正常目标是 `1 HyDE + 2 Vec`，Vec 硬上限为两条。若 source candidate 只有一条合格 Vec，则允许 `1 HyDE + 1 Vec`，不得复制或补造第二条 Vec。
+
+两类 source candidate 的区别及正式输入字段如下：
+
+| 类型 | Source candidate 来源 | 原始特征 | V2-A 正式裁切输入 |
+| --- | --- | --- | --- |
+| `legacy_v1_projection` | `projection.jsonl`，上游来自 V1 teacher | 原始输出通常为 `3 Lex + 3 Vec + 1 HyDE`；已有 projection 删除 Lex 后多数仍保留 3 Vec | `provenance.original_parsed_output` |
+| `native_v2_vh` | `native-candidates.jsonl` | 使用 V2-VH teacher 直接生成；绝大多数有效记录已是 `1 HyDE + 2 Vec` | `output` |
+
+当前 artifact 快照中，9,977 个 legacy projection candidate 有 9,746 个记录了 `dropped_lex_count=3`，其中 8,673 个删除 Lex 后仍为 `1 HyDE + 3 Vec`；14,892 个 native candidate 中有 14,641 个为 `1 HyDE + 2 Vec`、17 个为 `1 HyDE + 1 Vec`，另有 234 个无可用 output。该统计只说明输入形态，V2-A 仍以重新运行 canonicalization 后生成的 manifest 为准。
+
+裁切按以下固定策略对每个 source candidate 执行：
+
+1. 使用严格 parser 读取完整原始输出，保留 raw bytes、解析结果及原始行索引；除了去除每个 payload 首尾的空白字符外，不改写文本。
+2. 删除全部 `lex` 行。删除 Lex 是已批准的输出类型投影，不将 Lex 文本合并、改写或转化为 Vec/HyDE。
+3. 要求 source candidate 中恰好存在一条非空 `hyde`。缺失 HyDE 或出现多条 HyDE 时标记为 `contract_invalid`，不得选择其中一条继续处理。
+4. 按原始出现顺序遍历非空 `vec`。对首尾空白规范化后完全相同的 Vec，只保留第一次出现并记录被删除行的索引与 `exact_duplicate` reason；最多保留前两条不同的 Vec，其余 Vec 以 `vec_cap_exceeded` reason 记录删除。
+5. 规范化结果按 `hyde`、`vec`、可选第二条 `vec` 的固定顺序序列化。若没有保留任何 Vec，则标记为 `contract_invalid`；只有一条 Vec 时保留 `1 HyDE + 1 Vec`，不进行内容补全。
+6. 对 canonical output 执行第 6 节的完整 Contract 检查。近似重复、语义重复、超长、实体或约束问题均由后续 Contract/语义准入处理，不能通过继续寻找第三条 Vec、改写文本或截断 token 静默修复。
+
+这里的”裁切”只允许删除完整的 Lex 行、完全重复的 Vec 行和超过 Vec 数量上限的完整 Vec 行，绝不允许截断 HyDE 或 Vec 的词、字符或 token。Vec 或 completion 超过硬长度上限时，整个 canonical candidate 直接拒绝。
+
+每个 source candidate 及其 canonical candidate 必须获得新的稳定 ID：
+
+```text
+source_candidate_id = {input_id}:{candidate_index}
+
+canonical_candidate_id = sha256(
+  source_candidate_id + "\0" +
+  canonical_output_bytes
+)
+```
+
+Canonicalization ledger 至少记录 `source_candidate_id`、`canonical_candidate_id`、source artifact hash、canonical output、deletion_summary（删除 Lex 行数、重复 Vec 数、超限 Vec 数）和最终 Contract 状态。转换不会改变 source artifact；canonical candidate 写入新的 V2-A experiment 目录。
+
+现有 `legacy-subset-candidates.jsonl`、`native-subset-candidates.jsonl` 和 `selected-v2-vh.jsonl` 只作为历史诊断及交叉校验输入，不作为 V2-A 的正式 canonical output 或指标来源。V2-A 不得继承 `1 HyDE + 3 Vec`、旧 `subset_order` 或旧 winner 对应的 retrieval metric；所有 Contract-valid canonical candidate 必须在第 7 节定义的冻结环境中重新评分。
+
+输入 manifest 必须记录：
+
+- 源 artifact 路径、行数、字节数和 SHA-256；
+- 唯一 query 数和唯一 candidate 数；
+- 候选生成 provider、model revision、prompt version、参数和 provenance；
+- source dataset、split、qid、input_id、sample_key，以及可用时的 family/group identifier；
+- 完整 raw candidate output 和解析后的 canonical output；
+- 与全部 primary held-out query 的重复和重叠报告。
+
+Gold document 和 qrels 绝不能进入 teacher prompt，只能由冻结的 retrieval scorer 使用。
+
+## 6. 输出 Contract
+
+每个候选和 student completion 均使用以下协议：
 
 ```text
 hyde: <one hypothetical relevant passage>
@@ -99,53 +182,52 @@ vec: <one semantic search query>
 vec: <optional second complementary semantic search query>
 ```
 
-Contract requirements:
+Contract 要求：
 
-- exactly one HyDE line;
-- one or two Vec lines after HyDE;
-- no Lex lines, think blocks, commentary, bullets, or Markdown wrappers;
-- HyDE target length: 40 to 100 words in the output language;
-- short or unambiguous queries may use fewer than 40 words;
-- complex queries may exceed 100 words;
-- HyDE hard maximum: 150 words and 256 pinned-Qwen tokens;
-- each Vec hard maximum: 48 pinned-Qwen tokens;
-- total completion hard maximum: 384 pinned-Qwen tokens;
-- HyDE 5-gram repetition rate must not exceed 30%;
-- Vec1 and Vec2 must not be near duplicates;
-- a Vec must not merely copy the complete input query.
+- 恰好一条 HyDE；
+- HyDE 后有一条或两条 Vec；
+- 不允许 Lex、think block、说明文字、项目符号或 Markdown wrapper；
+- HyDE 目标长度：20–120 词（通过 prompt 引导，不作为硬性拒绝条件）；
+- HyDE 安全上限：200 词（超过时拒绝）；
+- 每条 Vec 硬上限：48 个 pinned-Qwen token；
+- completion 总硬上限：384 个 pinned-Qwen token；
+- Vec1 与 Vec2 不能近似重复；
+- Vec 不能只是完整复制输入 query。
 
-Length is measured and reported. It must not be enforced by silently truncating text. A hard-limit violation rejects the candidate.
+长度必须被测量并报告，不能通过静默截断强制满足。超过 HyDE/Vec/completion 硬上限时直接拒绝候选。
 
-## 7. Clean Retrieval Rescoring
+## 7. 干净环境下重新评分
 
-All candidates must be scored through the real QMD retrieval path with `rerank=false` and a frozen no-auto-generation profile.
+全部 Contract-valid canonical candidate 必须使用真实 QMD retrieval path，在 `rerank=false` 且关闭自动 expansion 的冻结 profile 下重新评分。`contract_invalid` source/canonical candidate 保留在 ledger 中，但不执行 retrieval，也不能以零分代替 retrieval 结果。
 
-The formal rescoring manifest pins:
+正式 rescoring manifest 必须固定：
 
-- QMD Git commit and `qmd_dirty=false`;
-- collection name and root;
-- collection-scoped index fingerprint;
-- active document/source mapping;
-- embedding model identity and SHA-256;
-- vector completeness;
-- retrieval cutoffs and limits;
-- `result_limit=30`, `per_list_limit=30`, and `candidate_limit=40` or their explicitly versioned successors;
-- query, document, qrels, and split hashes;
-- expansion parser and contract versions;
-- rerank disabled;
-- zero retrieval errors.
+- QMD Git commit，且 `qmd_dirty=false`；
+- collection name 和 root；
+- collection-scoped index fingerprint；
+- 当前生效的 document/source mapping；
+- embedding model identity 和 SHA-256；
+- vector completeness；
+- retrieval cutoff 和 limit；
+- `result_limit=30`、`per_list_limit=30`、`candidate_limit=40`，或经过显式版本化的后续配置；
+- query、document、qrels 和 split hash；
+- expansion parser 和 Contract version；
+- rerank 关闭；
+- retrieval error 为零。
 
-For every query, score raw retrieval and every Contract-valid candidate for:
+对每条 query 的 raw retrieval 和每个 Contract-valid candidate 计算：
 
-- Recall@10;
-- Recall@20;
-- Recall@30;
-- MRR@10;
-- nDCG@10.
+- Recall@10；
+- Recall@20；
+- Recall@30；
+- MRR@10；
+- nDCG@10。
 
-## 8. Strict Pareto Admission
+## 8. 严格 Pareto 准入与候选选择
 
-A candidate is retrieval-eligible only when all five per-query guardrails hold:
+### 8.1 硬性准入（Strict Pareto Eligibility）
+
+只有同时满足以下五条 per-query guardrail 的候选才具有 retrieval eligibility：
 
 ```text
 candidate Recall@10  >= raw Recall@10
@@ -155,164 +237,126 @@ candidate MRR@10     >= raw MRR@10
 candidate nDCG@10    >= raw nDCG@10
 ```
 
-At least one metric must be strictly greater than raw. There is no epsilon regression allowance.
+至少一个指标必须严格高于 raw。任一项退化直接淘汰，不可协商。
 
-When a query has multiple eligible candidates, select in this order:
+### 8.2 字典序 Tie-Breaker（Winner Selection）
 
-1. greater number of strictly improved metrics;
-2. greater Recall@30 delta;
-3. greater MRR@10 delta;
-4. greater nDCG@10 delta;
-5. greater Recall@20 delta;
-6. fewer Vec lines;
-7. fewer completion tokens;
-8. lower stable candidate ID.
+同一 query 存在多个合格候选时，按以下字典序选出唯一 winner：
 
-The final tie-breaker must be deterministic. A query without an eligible candidate is `no_pareto_winner` and does not enter V2-A SFT.
+1. 严格提升的指标数量更多（最多 5）— 更偏好检索收益广度；
+2. Recall@30 delta 更大；
+3. MRR@10 delta 更大；
+4. nDCG@10 delta 更大；
+5. stable candidate ID 更小 — 纯确定性决胜。
 
-## 9. Semantic Admission
+第 1–4 项决定检索收益偏好，第 5 项保证可复现。一旦某一级分出胜负即停止，不继续比较后续级别。
 
-Retrieval benefit does not prove semantic fidelity. Every Pareto-selected candidate must pass all three semantic layers.
+没有合格候选的 query 标记为 `no_pareto_winner`，不得进入 V2-A SFT。
 
-### 9.1 Deterministic Checks
+## 9. 语义准入
 
-Deterministic checks cover what can be established without a judge:
+检索收益不能证明语义忠实性。每个 Pareto-selected candidate 必须通过以下三层语义检查。
 
-- quoted phrases, version identifiers, error codes, numbers, units, and explicit named entities are preserved in at least one output line;
-- explicit negation and comparison direction are represented in HyDE and at least one Vec;
-- output does not introduce a contradictory number, entity, polarity, or version;
-- Vec items pass the duplication checks from the output Contract.
+### 9.1 确定性检查
 
-A deterministic failure rejects the candidate before judge review.
+确定性检查只覆盖无需 judge 即可判断的项目：
 
-### 9.2 Full LLM Judge
+- Vec 通过输出 Contract 中的重复检查，即 Vec1 与 Vec2 不能近似重复。
 
-An independently versioned judge reviews every remaining candidate and returns one of:
+确定性检查失败的候选在 judge review 前直接拒绝。
 
-- `pass`;
-- `fail`;
-- `uncertain`.
+### 9.2 全量 LLM Judge
 
-The judge assigns normalized reason codes including:
+使用独立版本化的 judge 审核所有剩余候选，并返回以下状态之一：
 
-- `entity_drift`;
-- `lost_constraint`;
-- `lost_negation`;
-- `unsupported_fact`;
-- `unsupported_causality`;
-- `ambiguous_overinterpretation`;
-- `unsupported_abbreviation_expansion`;
-- `non_complementary_vec`;
-- `intent_drift`.
+- `pass`；
+- `fail`；
+- `uncertain`。
 
-The judge prompt, model revision, decoding parameters, request/response hashes, raw response, parsed status, and reason codes are retained.
+Judge 使用规范化 reason code，包括：
 
-### 9.3 Human Review
+- `entity_drift`；
+- `lost_constraint`；
+- `lost_negation`；
+- `unsupported_fact`；
+- `unsupported_causality`；
+- `ambiguous_overinterpretation`；
+- `unsupported_abbreviation_expansion`；
+- `non_complementary_vec`；
+- `intent_drift`。
 
-Human review covers:
+必须保留 judge prompt、model revision、decoding parameter、请求与响应 hash、raw response、解析状态和 reason code。
 
-- every judge `fail`;
-- every judge `uncertain`;
-- a deterministic, source-and-phenomenon-stratified 10% sample of judge `pass` records.
+只有最终 `semantic_status=pass` 的记录可以进入 release。
 
-Only final `semantic_status=pass` records can enter the release. A human may override a judge decision only with a recorded decision and reason.
+## 10. 修复与失败处理
 
-If the pass sample contains a critical error such as entity drift, lost negation, lost constraint, or fabricated fact, release sealing pauses. The corresponding source/phenomenon stratum is reviewed in full, the judge or deterministic rule is corrected, and semantic admission is rerun from the frozen candidate input.
+流水线使用以下明确且互斥的终态：
 
-The release gate is zero known critical semantic errors.
+- `contract_invalid`；
+- `no_pareto_winner`；
+- `semantic_fail`；
+- `eligible`；
+- `selected`。
 
-## 10. Repair and Failure Handling
+`eligible` 超过 2,000 条容量上限时，在 ledger 中额外标记，不单设终态。
 
-The pipeline uses explicit non-overlapping terminal statuses:
+原始输出无法完成结构规范化，以及 canonical output 未通过第 6 节 Contract，终态均为 `contract_invalid`；ledger 必须使用 `failure_stage=canonicalization|contract_validation` 和独立 reason code 区分失败阶段。
 
-- `contract_invalid`;
-- `retrieval_error`;
-- `metric_tradeoff`;
-- `no_pareto_winner`;
-- `semantic_fail`;
-- `semantic_uncertain`;
-- `eligible`;
-- `selected`;
-- `not_selected_capacity`.
+错误不得折叠为 `no_pareto_winner`。
 
-Errors must not be collapsed into `no_pareto_winner`.
+候选文本绝不能被静默修复。若重写一个被拒候选，重写结果必须作为具有新 ID 和新 provenance 的新 candidate，并重新执行 Contract validation、retrieval scoring、Pareto admission 和 semantic admission。V2-A 不执行这类再生成；修复属于 fallback/V2-B 路径。
 
-Candidate text is never silently repaired. If a rejected candidate is rewritten, the rewrite becomes a new candidate with a new ID and provenance and must repeat Contract validation, retrieval scoring, Pareto admission, and semantic admission. V2-A does not perform such regeneration; repair is part of the fallback/V2-B path.
+被拒候选继续保留在 ledger 中，用于失败分析和未来可能的 preference pair 构造，但不能作为 SFT 正样本。
 
-Rejected candidates remain in the ledger for failure analysis and possible later preference-pair construction. They are not SFT positives.
+## 11. 来源分配与数据规模
 
-## 11. Source Allocation and Dataset Size
+最终 train split 包含 1,000–2,000 条记录。Validation/retrieval-dev 独立计算，规模约为 train 的 10%，因此 sealed release 预计共包含约 1,100–2,200 条记录。
 
-The final training split contains 1,000 to 2,000 records. Validation/retrieval-dev is separate and approximately 10% of the training count, so the sealed release is expected to contain roughly 1,100 to 2,200 records.
+分配规则：
 
-Allocation rules:
+1. 稀缺来源的全部合格记录均应使用，其中一部分按 family-disjoint 原则分入 validation。
+2. 不为满足目标比例而复制或过采样稀缺来源。
+3. 不强制各来源等比例。
+4. 将 NFCorpus 占比超过 40% 作为分布预警，而不是硬拒绝规则。
+5. 如果合格 train 超过 2,000 条，应减少丰富且重复度高的 stratum，同时保留来源覆盖。
+6. 对每个来源记录 `input_count`、`pareto_count`、`semantic_pass_count`、`selected_train_count`、`selected_validation_count` 和拒绝原因。
 
-1. Use every eligible record from a scarce source, subject to assigning some records to the family-disjoint validation split.
-2. Do not duplicate or oversample a scarce source to meet a target ratio.
-3. Do not enforce equal source proportions.
-4. Treat a 40% NFCorpus share as a distribution warning, not a hard rejection rule.
-5. If the eligible training set exceeds 2,000, reduce abundant, repetitive strata while preserving source and query-phenomenon coverage.
-6. Record every source's `input_count`, `pareto_count`, `semantic_pass_count`, `selected_train_count`, `selected_validation_count`, and rejection reasons.
+如果经过语义准入和 family-safe splitting 后的 train 不足 1,000 条，V2-A 不得启动训练。流水线应输出供给报告，并进入需要另行批准的 fallback generation 设计。
 
-If semantic admission and family-safe splitting produce fewer than 1,000 training records, V2-A must not train. It exits with a supply report and proceeds to a separately approved fallback-generation design.
+## 12. 数据切分
 
-## 12. Query Phenomena and Splitting
+切分要求：
 
-Each query receives deterministic or reviewed phenomenon tags where applicable:
+- seed 42；
+- 尽可能按来源分层；
+- family/group-disjoint；
+- normalized-query 与 near-duplicate disjoint；
+- validation 规模约为 train 的 10%；
+- 与所有 primary held-out 和 stress-test query 零重叠；
+- 训练前冻结 split membership 并记录 hash。
 
-- short/ambiguous/entity-only;
-- negation/exclusion;
-- comparison/preference;
-- number/unit/threshold;
-- version/product/error-code;
-- temporal/current-information;
-- abbreviation/acronym;
-- long natural-language question;
-- code/error-message;
-- finance;
-- health/medical;
-- science;
-- software/technical;
-- general knowledge.
+Validation split 同时用于 completion-only loss 诊断和 retrieval-dev checkpoint 选择。Validation loss 永远不能用于选择 adapter。
 
-Splitting requirements:
+## 13. Student Prompt
 
-- seed 42;
-- source-stratified where possible;
-- family/group-disjoint;
-- normalized-query and near-duplicate disjoint;
-- validation size approximately 10% of train;
-- no overlap with any primary held-out or stress-test query;
-- split membership frozen before training and recorded by hash.
+V2 prompt 保持现有输出类型，并加入已批准的长度行为。数据物化前必须冻结 prompt 的精确字节。
 
-The validation split serves two purposes: completion-only loss diagnostics and retrieval-dev checkpoint selection. Validation loss never selects the adapter.
-
-## 13. Student Prompt and Prompt-Only A/B
-
-The V2 prompt preserves the existing output types and adds the approved length behavior. Its exact bytes are frozen before data materialization.
-
-Required instructions include:
+Prompt 必须包含以下要求。下面保留实际冻结的英文 prompt 原文，避免翻译改变训练配置：
 
 ```text
 Return exactly one hyde line followed by one or two vec lines.
-Target 40-100 words for HyDE; use fewer for a simple query and never exceed 150 words.
+Target 20-120 words for HyDE; use fewer for a simple query.
 Preserve entities, versions, numbers, constraints, negation, comparison, and intent.
 Do not invent unsupported facts, causal claims, laws, statistics, or definitions.
 Make Vec queries complementary rather than duplicates.
 ```
 
-Before V2 training, run a prompt-only diagnostic on retrieval-dev:
+正式评估中通过 `SFT-VH + V2 prompt` arm 与 `SFT-VH + 原 prompt` arm 的对比来分离 prompt 效应与数据效应，无需前置独立实验。
 
-1. current SFT-VH adapter with its original prompt;
-2. current SFT-VH adapter with the V2 prompt.
+## 14. 训练配置
 
-Compare retrieval metrics, Contract validity, HyDE length distribution, repetition, semantic failures, generated tokens, and latency. This experiment determines the stronger SFT-VH prompt arm before the primary test is opened.
-
-The stronger arm becomes the controlled SFT-VH baseline for V2 data-effect comparisons. The original deployed SFT-VH arm is retained for system-level comparison.
-
-## 14. Training Configuration
-
-V2-A keeps the SFT-VH model and optimization configuration fixed:
+V2-A 保持 SFT-VH 的模型和优化配置不变：
 
 ```text
 model: Qwen/Qwen3-1.7B
@@ -340,157 +384,123 @@ seed/data seed: 42 for the candidate run
 loss: completion-only
 ```
 
-All train and validation sequences are preflighted before model loading. A sequence over 1,024 tokens is rejected; the trainer must not truncate completion-only supervision.
+加载模型前，对全部 train 和 validation sequence 执行 preflight。超过 1,024 token 的 sequence 直接拒绝；trainer 不得截断 completion-only supervision。
 
-Save epoch 1, epoch 2, and epoch 3. Set `load_best_model_at_end=false`. Run retrieval-dev for every checkpoint and select the candidate checkpoint from retrieval evidence.
+保存 epoch 1、epoch 2 和 epoch 3。设置 `load_best_model_at_end=false`。对每个 checkpoint 执行 retrieval-dev，并根据检索证据选择候选 checkpoint。
 
-Training loss and validation loss are diagnostics only.
+Training loss 和 validation loss 只作为诊断。
 
-## 15. Seed Strategy
+## 15. Seed 限制
 
-The first V2-A training run uses seed and data seed 42. If its selected checkpoint passes the candidate promotion gate, run a complete second training with a distinct frozen seed.
+V2-A 训练使用单一 seed 和 data seed 42。单 seed 下的 CI 估计仅反映 query-level variance，不反映 training variance。多 seed 验证留待后续实验。
 
-Final research promotion requires:
-
-- the required point-estimate directions in both seeds;
-- the average per-query metric across the two seeds to pass the paired-bootstrap gates;
-- no seed-specific semantic, protocol, or truncation regression hidden by averaging.
-
-The second seed is not used to choose a different prompt, data release, or checkpoint rule.
-
-## 16. Evaluation Layers
+## 16. 评估分层
 
 ### 16.1 Retrieval-Dev
 
-Retrieval-dev is the frozen V2 validation split. It is used for:
+Retrieval-dev 是冻结的 V2 validation split，用于：
 
-- prompt-only A/B;
-- epoch 1/2/3 checkpoint selection;
-- development diagnostics and failure analysis.
+- epoch 1/2/3 checkpoint 选择；
+- 开发阶段诊断与失败分析。
 
-It must not be added to formal held-out macro results.
+它不得进入正式 held-out macro 结果。
 
 ### 16.2 Primary Held-Out Suite
 
-The primary suite contains:
+Primary suite 包含：
 
-- SciFact test;
-- FiQA test;
-- CQADup Android;
-- NFCorpus test;
-- FreshStack test.
+- SciFact test；
+- FiQA test；
+- CQADup Android；
+- NFCorpus test；
+- FreshStack test。
 
-Each dataset contributes equal weight to the macro, regardless of query count. Primary test queries, qrels, documents, and results are not used to alter the data release, prompt, selection rule, checkpoint rule, or semantic policy.
+无论 query 数量多少，每个数据集在 macro 中等权。Primary test 的 query、qrels、document 和结果不得用于修改数据 release、prompt、selection rule、checkpoint rule 或 semantic policy。
 
-The SFT-VH baseline must be evaluated on NFCorpus test and FreshStack test under the same clean profile before V2 test comparison.
+进行 V2 test 比较前，必须在相同的干净 profile 下补充 SFT-VH baseline 在 NFCorpus test 和 FreshStack test 上的评估。
 
-### 16.3 Stress Tests
+### 16.3 Stress Test
 
-Stress tests are reported independently:
+以下 stress test 独立报告：
 
-- CQADup Webmasters;
-- short entity and ambiguous queries;
-- negation, number, version, and abbreviation slices;
-- long code and error-message queries;
-- a human-reviewed semantic-drift set.
+- CQADup Webmasters；
+- 短实体和歧义 query；
+- 否定、数字、版本和缩写 slice；
+- 长代码和错误信息 query；
+- 经人工审核的 semantic-drift 集合。
 
-Webmasters does not enter the primary macro and cannot independently veto a generally useful expansion model. Material regressions remain visible and may motivate later routing work.
+Webmasters 不进入 primary macro，不能单独否决一个具有通用价值的 expansion 模型。实质性退化仍必须公开，并可用于推动后续 routing 设计。
 
-## 17. Formal Comparison Arms
+## 17. 正式比较 Arm
 
-The formal evaluation includes:
+正式评估包含：
 
-| Arm | Purpose |
+| Arm | 用途 |
 | --- | --- |
-| Raw query | Original retrieval baseline |
-| SFT-VH + original prompt | Current deployed research baseline |
-| SFT-VH + V2 prompt | Prompt-only and controlled data baseline |
-| V2-A selected checkpoint + V2 prompt, seed 42 | Candidate data experiment |
-| V2-A selected checkpoint + V2 prompt, second seed | Replication |
+| Raw query | 原始检索 baseline |
+| SFT-VH + 原 prompt | 当前已部署的 research baseline |
+| SFT-VH + V2 prompt | 分离 prompt 效应与数据效应 |
+| V2-A selected checkpoint + V2 prompt，seed 42 | 候选数据实验 |
 
-All non-raw arms use the same parser, retrieval profile, index, embedding model, cutoffs, limits, rerank setting, and latency measurement method.
+所有非 raw arm 必须使用相同的 parser、retrieval profile、index、embedding model、cutoff、limit、rerank 设置和 latency 测量方法。
 
-## 18. Promotion Gates
+## 18. 晋级门槛
 
-Compare V2-A against the stronger SFT-VH prompt arm selected on retrieval-dev. Report comparison against raw and the original SFT-VH arm as additional system-level evidence.
+V2-A 与 SFT-VH + V2 prompt arm 比较。与 raw 和原始 SFT-VH arm 的比较作为额外系统级证据报告。
 
-On the five-dataset equal-weight primary macro, V2-A must satisfy:
+在五数据集等权 primary macro 上，V2-A 必须满足：
 
 ```text
-Recall@10:
-  paired-bootstrap 95% CI lower bound >= -0.5 percentage points
-
-Recall@20:
-  point estimate >= 0
-
-Recall@30, MRR@10, nDCG@10:
-  all three point estimates > 0
-  at least two paired-bootstrap 95% CI lower bounds > 0
+五指标等权 macro 平均点估计 > 0
+至少 3/5 指标的 paired-bootstrap 95% CI 下界 > 0
 ```
 
-Generation and semantic gates:
+生成 gate：
 
 ```text
-Contract-valid rate >= 99.5%
 format errors = 0
 fallbacks = 0
 generation errors = 0
-known critical semantic errors = 0
 ```
 
-Every dataset and phenomenon slice reports per-query win/tie/loss counts and top gains/losses. Equal-weight macro results must not hide a material per-dataset regression.
+每个数据集必须报告 per-query win/tie/loss 数量及 top gain/loss。等权 macro 结果不得掩盖某个数据集的实质性退化。
 
-Latency reporting includes expansion generation and retrieval. V2-A remains a research candidate unless a later production decision explicitly approves its end-to-end cost and compatibility.
+Latency 报告包含 expansion generation 和 retrieval。除非后续生产决策明确批准其端到端成本和兼容性，否则 V2-A 仍属于 research candidate。
 
-## 19. Required Artifacts
+## 19. 必需 Artifact
 
-The V2-A package contains immutable manifests and hashes for:
+V2-A package 必须包含以下核心 artifact：
 
-- candidate input inventory;
-- duplicate/leakage audit;
-- frozen retrieval environment and index fingerprints;
-- raw and per-candidate retrieval results;
-- Pareto selection ledger;
-- Contract/length/repetition audit;
-- LLM judge raw and normalized results;
-- human-review decisions and pass-sample selection;
-- source and phenomenon allocation report;
-- split manifest;
-- prompt-only A/B results;
-- sealed SFT train and validation JSONL;
-- release manifest;
-- training config and run manifests;
-- all three checkpoint adapters per seed;
-- generation manifests;
-- formal retrieval runs;
-- paired-bootstrap and per-query win/loss reports;
-- end-to-end latency report.
+- 候选输入清单与 canonicalization ledger；
+- 重复与泄漏审计；
+- 冻结的 retrieval environment 和 index fingerprint；
+- raw 与 per-candidate retrieval 结果；
+- Pareto selection ledger；
+- LLM judge 的 raw 与规范化结果；
+- 来源分配报告；
+- split manifest；
+- sealed SFT train 和 validation JSONL；
+- release manifest；
+- training config 和 run manifest；
+- seed 42 的三个 checkpoint adapter；
+- 正式 retrieval run；
+- paired bootstrap 和 per-query win/loss 报告。
 
-Raw source and candidate artifacts remain immutable. Derived artifacts are written under new experiment IDs and are never used to overwrite SFT-VH evidence.
+Raw source 和 candidate artifact 保持不可变。Derived artifact 写入新的 experiment ID，绝不能覆盖 SFT-VH 证据。
 
-## 20. V2-B Entry Gate
+## 20. 本设计的批准项
 
-V2-B may be designed only after one of these outcomes:
+以下决策已在交互过程中确认：
 
-1. V2-A passes promotion gates, and additional domain coverage is the next explicit objective.
-2. V2-A cannot reach 1,000 training records after semantic admission, and a supply report identifies which phenomena or sources need new candidates.
-3. V2-A fails retrieval promotion, and per-query analysis identifies a correctable candidate-coverage gap rather than a selection or prompt problem.
-
-V2-B may then introduce FreshStack train, new NFCorpus candidates, or another teacher. It must preserve family-disjoint held-out tests and use new release and experiment IDs.
-
-## 21. Acceptance of This Design
-
-The following decisions were approved interactively:
-
-- comprehensive retrieval objective;
-- strict five-metric per-query Pareto admission;
-- two-stage V2-A then V2-B sequence;
-- scarce eligible source records are retained rather than discarded for quotas;
-- 1,000 to 2,000 final training records;
-- full deterministic and LLM semantic review plus human fail/uncertain review and 10% pass sampling;
-- 40 to 100 word HyDE target and 150 word hard maximum;
-- explicit failure ledger with no silent repair;
-- prompt-only pre-training A/B;
-- seed 42 candidate run followed by second-seed replication after promotion;
-- five-dataset primary held-out suite;
-- Webmasters as a separately reported stress test.
+- 优化综合检索质量；
+- 使用严格的五指标 per-query Pareto 准入；
+- Legacy V1 candidate 删除全部 Lex、按原始顺序最多保留两条不同 Vec，并与 native candidate 一起规范化为 `1 HyDE + 1–2 Vec`；裁切只删除完整行，不截断或改写文本；
+- 采用先 V2-A、后 V2-B 的两阶段顺序；
+- 稀缺来源的合规记录全部保留，不因配额丢弃；
+- 最终训练记录为 1,000–2,000 条；
+- 全量确定性检查和 LLM 语义审核；
+- HyDE 目标长度 20–120 词（prompt 引导），安全上限 200 词；Vec 硬上限 48 token，completion 硬上限 384 token；
+- 使用明确的失败 ledger，不做静默修复；
+- seed 42 单 seed 实验，CI 仅反映 query-level variance；
+- 使用五数据集 primary held-out suite；
+- Webmasters 作为单独报告的 stress test。
