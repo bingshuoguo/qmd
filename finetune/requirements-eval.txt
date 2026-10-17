@@ -1,0 +1,8 @@
+# Inference contract for the sealed 8B evaluation. Verified before model loading.
+# Keep training environments separate; do not install into them in place.
+torch==2.11.0
+transformers==5.5.0
+peft==0.20.0
+accelerate==1.14.0
+numpy==2.4.6
+PyYAML==6.0.3

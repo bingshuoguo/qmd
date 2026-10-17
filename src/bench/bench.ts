@@ -18,8 +18,11 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -587,6 +590,33 @@ export function computeGitDiffSha256(
   return hash.digest("hex");
 }
 
+function computeGitDiffSha256FromPaths(
+  trackedDiff: string,
+  repoRoot: string,
+  untrackedPaths: readonly string[],
+): string {
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  hash.update("tracked\0", "utf8");
+  hash.update(trackedDiff, "utf8");
+  for (const path of [...untrackedPaths].sort()) {
+    hash.update("\0untracked\0", "utf8");
+    hash.update(path, "utf8");
+    hash.update("\0", "utf8");
+    const descriptor = openSync(join(repoRoot, path), "r");
+    try {
+      for (;;) {
+        const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+  return hash.digest("hex");
+}
+
 function inspectGitState(): Pick<RunMetadata, "qmd_commit" | "qmd_dirty" | "qmd_diff_sha256"> {
   const git = (args: string[]): string =>
     execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -600,14 +630,10 @@ function inspectGitState(): Pick<RunMetadata, "qmd_commit" | "qmd_dirty" | "qmd_
   const untrackedPaths = git(["ls-files", "--others", "--exclude-standard", "-z"])
     .split("\0")
     .filter(path => path.length > 0);
-  const untrackedFiles = untrackedPaths.map(path => ({
-    path,
-    bytes: readFileSync(join(repoRoot, path)),
-  }));
   return {
     qmd_commit: qmdCommit,
     qmd_dirty: true,
-    qmd_diff_sha256: computeGitDiffSha256(trackedDiff, untrackedFiles),
+    qmd_diff_sha256: computeGitDiffSha256FromPaths(trackedDiff, repoRoot, untrackedPaths),
   };
 }
 
@@ -689,7 +715,7 @@ function vectorBytes(value: unknown): Buffer {
 }
 
 export function inspectBenchmarkIndex(
-  store: Store,
+  store: Pick<Store, "db">,
   benchmarkDir: string,
   benchmark: LoadedBenchmarkV2,
   profile: RetrievalProfileV2,
