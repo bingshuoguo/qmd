@@ -70,7 +70,7 @@ STRESS_DATASETS = ["webmasters", "fiqa-dev"]
 
 # Evaluation arms: (arm_name, adapter_path, prompt_version)
 ARMS = {
-    "sft-vh-orig": (V2_VH_ADAPTER, "v2-vh"),
+    "sft-vh-orig": (V2_VH_ADAPTER, "v2-vh-legacy"),
     "sft-vh-v2a": (V2_VH_ADAPTER, "v2a-pareto"),
     "v2a": (V2A_ADAPTER, "v2a-pareto"),
 }

@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 dist/
 package-lock.json
 .npmrc
@@ -32,3 +32,15 @@ finetune/benchmarks/qmd-expansion-scifact-v1/raw-generations/
 finetune/qmd-adapters/
 .claude/
 .idea/
+
+# Local evaluation assets and operational evidence are not source revisions.
+*.sqlite.*
+*.py.before-*
+*.ts.orig
+/finetune/7-evaluation/
+/finetune/data/opd-v1/
+/finetune/data/qwen3-8b-eval-index-v1/
+/finetune/evaluation-runs/
+/finetune/*.log
+/transfer-logs/
+/unsloth_compiled_cache/
