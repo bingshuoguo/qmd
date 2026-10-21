@@ -16,6 +16,13 @@
 
 ### Internal
 
+- Add `finetune/benchmarks/public-eval/` for evaluating fine-tuned query-expansion
+  adapters. Prompts are read only from a sealed SFT release manifest, and the
+  manifest is validated against every stored training prompt. Truncation is
+  counted per sample using EOS. Raw outputs are hash-checked against their
+  manifest and the benchmark before `qmd bench` reads them.
+  `generateExpansionArtifact` now also passes each query's `qid` to `generateRaw`.
+
 - Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`
   (`context`, `term`, `output`, `help`, and `commands/{docs,search,indexing,
   collections,doctor,skills}`) with zero user-visible behavior change: every
