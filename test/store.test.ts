@@ -528,6 +528,20 @@ describe("Document Helpers", () => {
     const content = "# 📝 Notes\n\n## Meeting Summary\n\nContent";
     expect(extractTitle(content, "file.md")).toBe("Meeting Summary");
   });
+
+  test("extractTitle never takes the next line as an empty heading's title", () => {
+    expect(extractTitle("#\nBody text", "my-note.md")).toBe("my-note");
+    expect(extractTitle("#\n## Real Title\nBody", "file.md")).toBe("Real Title");
+    expect(extractTitle("*\nBody text", "my-note.org")).toBe("my-note");
+    expect(extractTitle("#+TITLE:\n* Heading\nBody", "file.org")).toBe("Heading");
+  });
+
+  test("extractTitle skips empty headings that have trailing whitespace", () => {
+    expect(extractTitle("#   \n## Real Title\nBody", "file.md")).toBe("Real Title");
+    expect(extractTitle("#+TITLE: \n* Heading\nBody", "file.org")).toBe("Heading");
+    expect(extractTitle("*   \n* Heading\nBody", "file.org")).toBe("Heading");
+    expect(extractTitle("# Title  \nBody", "file.md")).toBe("Title");
+  });
 });
 
 // =============================================================================
