@@ -175,6 +175,34 @@ describe("offline expansion artifact generation", () => {
     expect(summary).toMatchObject({ resumed: 0, generated: 2 });
   });
 
+  test("starts fresh when the partial is empty, even if a stale identity record remains", async () => {
+    const root = fixture();
+    mkdirSync(join(root, "expansions"));
+    const partial = join(root, "expansions", "qwen-base.jsonl.partial");
+    writeFileSync(`${partial}.meta.json`, JSON.stringify({ identity: { model: "model-a" } }));
+
+    const summary = await generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity: { model: "model-b" },
+      generateRaw: async query => `vec: ${query}`,
+    });
+    expect(summary).toMatchObject({ resumed: 0, generated: 2 });
+  });
+
+  test("rejects an unreadable identity record with a recoverable error", async () => {
+    const root = fixture();
+    await interruptAfterFirstQuery(root, { model: "qwen" });
+    writeFileSync(join(root, "expansions", "qwen-base.jsonl.partial.meta.json"), "{not json");
+
+    await expect(generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity: { model: "qwen" },
+      generateRaw: async query => `vec: ${query}`,
+    })).rejects.toThrow("Unreadable partial identity record; rerun with --force");
+  });
+
   test("records generation errors and continues", async () => {
     const root = fixture();
     const summary = await generateExpansionArtifact({

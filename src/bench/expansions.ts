@@ -88,15 +88,20 @@ function assertResumableIdentity(
   metaPath: string,
   identity: Record<string, string>,
 ): void {
-  if (!existsSync(metaPath)) {
-    if (readFileSync(partialPath, "utf8").trim().length > 0) {
-      throw new Error(`Partial expansion artifact has no identity record; rerun with --force: ${partialPath}`);
-    }
+  if (readFileSync(partialPath, "utf8").trim().length === 0) {
     writeFileSync(metaPath, `${JSON.stringify({ identity }, null, 2)}\n`, "utf8");
     return;
   }
-  const recorded = (JSON.parse(readFileSync(metaPath, "utf8")) as { identity?: Record<string, string> })
-    .identity ?? {};
+  if (!existsSync(metaPath)) {
+    throw new Error(`Partial expansion artifact has no identity record; rerun with --force: ${partialPath}`);
+  }
+  let recorded: Record<string, string>;
+  try {
+    recorded = (JSON.parse(readFileSync(metaPath, "utf8")) as { identity: Record<string, string> }).identity;
+    if (typeof recorded !== "object" || recorded === null) throw new Error("missing identity");
+  } catch {
+    throw new Error(`Unreadable partial identity record; rerun with --force: ${metaPath}`);
+  }
   const keys = [...new Set([...Object.keys(recorded), ...Object.keys(identity)])].sort();
   const changed = keys.filter(key => recorded[key] !== identity[key]);
   if (changed.length > 0) {
