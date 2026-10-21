@@ -115,7 +115,7 @@ function assertResumableIdentity(
 export async function generateExpansionArtifact(options: {
   benchmarkDir: string;
   runName: string;
-  generateRaw: (query: string) => Promise<string>;
+  generateRaw: (query: string, qid: string) => Promise<string>;
   /** Everything that determines generated output (model, prompt, ...); a partial is resumed only on an exact match. */
   identity: Record<string, string>;
   outputPath?: string;
@@ -180,7 +180,7 @@ export async function generateExpansionArtifact(options: {
     const queryStartedAt = performance.now();
     let generated: ParsedGeneratedExpansion;
     try {
-      generated = parseGeneratedExpansion(query.query, await options.generateRaw(query.query));
+      generated = parseGeneratedExpansion(query.query, await options.generateRaw(query.query, query.qid));
     } catch (error) {
       generated = {
         status: "generation_error",
