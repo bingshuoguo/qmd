@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,7 +68,9 @@ def _load_split(
     if not isinstance(entry, dict):
         raise ValueError(f"release manifest does not declare {artifact}")
 
-    path = release_root / entry["path"]
+    path = Path(os.path.normpath(release_root / entry["path"]))
+    if not path.is_relative_to(release_root):
+        raise ValueError(f"{artifact}: path escapes the release root: {entry['path']}")
     if not path.is_file():
         raise ValueError(f"declared artifact is missing: {path}")
 
@@ -105,7 +108,9 @@ def _load_split(
 
 def load_release(manifest_path: Path) -> Release:
     """Load and fully validate a sealed release; raise on any inconsistency."""
-    manifest_path = manifest_path.resolve()
+    # abspath, not resolve(): an archived experiment directory may be a symlink,
+    # and core_artifacts paths are relative to the release root as addressed.
+    manifest_path = Path(os.path.abspath(manifest_path))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     if manifest.get("status") != "sealed":

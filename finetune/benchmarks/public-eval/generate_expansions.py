@@ -79,6 +79,8 @@ def load_queries(benchmark_dir: Path) -> list[dict[str, str]]:
         queries.append({"qid": record["qid"], "query": record["query"]})
     if not queries:
         raise ValueError(f"{benchmark_dir}: queries.jsonl is empty")
+    if len({query["qid"] for query in queries}) != len(queries):
+        raise ValueError(f"{benchmark_dir}: queries.jsonl has duplicate qids")
     return queries
 
 
