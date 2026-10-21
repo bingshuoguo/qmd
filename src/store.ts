@@ -2493,11 +2493,11 @@ export async function hashContent(content: string): Promise<string> {
 
 const titleExtractors: Record<string, (content: string) => string | null> = {
   '.md': (content) => {
-    const match = content.match(/^##?\s+(.+)$/m);
+    const match = content.match(/^##?[ \t]+(\S[^\r\n]*)$/m);
     if (match) {
       const title = (match[1] ?? "").trim();
       if (title === "📝 Notes" || title === "Notes") {
-        const nextMatch = content.match(/^##\s+(.+)$/m);
+        const nextMatch = content.match(/^##[ \t]+(\S[^\r\n]*)$/m);
         if (nextMatch?.[1]) return nextMatch[1].trim();
       }
       return title;
@@ -2505,9 +2505,9 @@ const titleExtractors: Record<string, (content: string) => string | null> = {
     return null;
   },
   '.org': (content) => {
-    const titleProp = content.match(/^#\+TITLE:\s*(.+)$/im);
+    const titleProp = content.match(/^#\+TITLE:[ \t]*(\S[^\r\n]*)$/im);
     if (titleProp?.[1]) return titleProp[1].trim();
-    const heading = content.match(/^\*+\s+(.+)$/m);
+    const heading = content.match(/^\*+[ \t]+(\S[^\r\n]*)$/m);
     if (heading?.[1]) return heading[1].trim();
     return null;
   },

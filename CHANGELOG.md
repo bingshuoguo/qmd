@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Title extraction no longer uses the next line as the title when a Markdown
+  (`#`, `##`) or Org (`*`, `#+TITLE:`) heading is empty. It falls through to the
+  next real heading or the filename instead. Existing titles change only when a
+  document is re-indexed.
+
 ### Internal
 
 - Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`
