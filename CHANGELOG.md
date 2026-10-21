@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `npm run bench:expand` no longer resumes an interrupted `.partial` produced
+  by a different model or a changed `queries.jsonl`, which previously mixed
+  stale expansions into the new artifact. The generator identity is recorded
+  next to the partial and must match exactly; a pre-existing partial without
+  that record is rejected (rerun with `--force`).
+
 ### Internal
 
 - Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`

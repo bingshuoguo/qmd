@@ -82,7 +82,75 @@ describe("generated expansion parsing", () => {
 });
 
 describe("offline expansion artifact generation", () => {
+  /** Leaves a partial holding q1 by aborting the run on q2. */
+  async function interruptAfterFirstQuery(root: string, identity: Record<string, string>): Promise<void> {
+    await expect(generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity,
+      generateRaw: async query => `lex: ${query}`,
+      onProgress: progress => {
+        if (progress.completed === 1 && progress.qid !== null) throw new Error("interrupted");
+      },
+    })).rejects.toThrow("interrupted");
+  }
+
   test("resumes a validated prefix and atomically finalizes complete output", async () => {
+    const root = fixture();
+    const partial = join(root, "expansions", "qwen-base.jsonl.partial");
+    await interruptAfterFirstQuery(root, { model: "qwen" });
+    expect(existsSync(partial)).toBe(true);
+    const generateRaw = vi.fn(async (query: string) => `vec: ${query}`);
+
+    const summary = await generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity: { model: "qwen" },
+      generateRaw,
+    });
+
+    expect(generateRaw).toHaveBeenCalledOnce();
+    expect(generateRaw).toHaveBeenCalledWith("beta evidence");
+    expect(summary).toMatchObject({ total: 2, resumed: 1, generated: 1 });
+    expect(existsSync(partial)).toBe(false);
+    expect(existsSync(`${partial}.meta.json`)).toBe(false);
+    const outputPath = join(root, "expansions", "qwen-base.jsonl");
+    const queries = parseQueriesJsonl(readFileSync(join(root, "queries.jsonl"), "utf8"));
+    expect(parseExpansionsJsonl(readFileSync(outputPath, "utf8"), queries)).toHaveLength(2);
+  });
+
+  test("refuses to resume a partial produced with a different identity", async () => {
+    const root = fixture();
+    await interruptAfterFirstQuery(root, { model: "model-a" });
+    const generateRaw = vi.fn(async (query: string) => `vec: ${query}`);
+
+    await expect(generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity: { model: "model-b" },
+      generateRaw,
+    })).rejects.toThrow("different model");
+    expect(generateRaw).not.toHaveBeenCalled();
+  });
+
+  test("refuses to resume after queries.jsonl changes", async () => {
+    const root = fixture();
+    await interruptAfterFirstQuery(root, { model: "qwen" });
+    writeFileSync(join(root, "queries.jsonl"), [
+      JSON.stringify({ qid: "q1", query: "alpha evidence" }),
+      JSON.stringify({ qid: "q2", query: "gamma evidence" }),
+      "",
+    ].join("\n"));
+
+    await expect(generateExpansionArtifact({
+      benchmarkDir: root,
+      runName: "qwen-base",
+      identity: { model: "qwen" },
+      generateRaw: async query => `vec: ${query}`,
+    })).rejects.toThrow("different queries_sha256");
+  });
+
+  test("refuses a non-empty partial without an identity record, unless forced", async () => {
     const root = fixture();
     mkdirSync(join(root, "expansions"));
     const partial = join(root, "expansions", "qwen-base.jsonl.partial");
@@ -95,21 +163,16 @@ describe("offline expansion artifact generation", () => {
       fallback_used: false,
       error: null,
     })}\n`);
-    const generateRaw = vi.fn(async (query: string) => `vec: ${query}`);
-
-    const summary = await generateExpansionArtifact({
+    const options = {
       benchmarkDir: root,
       runName: "qwen-base",
-      generateRaw,
-    });
+      identity: { model: "qwen" },
+      generateRaw: async (query: string) => `vec: ${query}`,
+    };
 
-    expect(generateRaw).toHaveBeenCalledOnce();
-    expect(generateRaw).toHaveBeenCalledWith("beta evidence");
-    expect(summary).toMatchObject({ total: 2, resumed: 1, generated: 1 });
-    expect(existsSync(partial)).toBe(false);
-    const outputPath = join(root, "expansions", "qwen-base.jsonl");
-    const queries = parseQueriesJsonl(readFileSync(join(root, "queries.jsonl"), "utf8"));
-    expect(parseExpansionsJsonl(readFileSync(outputPath, "utf8"), queries)).toHaveLength(2);
+    await expect(generateExpansionArtifact(options)).rejects.toThrow("no identity record");
+    const summary = await generateExpansionArtifact({ ...options, force: true });
+    expect(summary).toMatchObject({ resumed: 0, generated: 2 });
   });
 
   test("records generation errors and continues", async () => {
@@ -117,6 +180,7 @@ describe("offline expansion artifact generation", () => {
     const summary = await generateExpansionArtifact({
       benchmarkDir: root,
       runName: "candidate-failed",
+      identity: { model: "candidate" },
       generateRaw: async query => {
         if (query.startsWith("alpha")) throw new Error("model unavailable");
         return `lex: ${query}`;
