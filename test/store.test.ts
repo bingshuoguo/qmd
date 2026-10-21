@@ -528,6 +528,18 @@ describe("Document Helpers", () => {
     const content = "# 📝 Notes\n\n## Meeting Summary\n\nContent";
     expect(extractTitle(content, "file.md")).toBe("Meeting Summary");
   });
+
+  test("extractTitle never takes the next line as an empty heading's title", () => {
+    expect(extractTitle("#\nBody text", "my-note.md")).toBe("my-note");
+    expect(extractTitle("#\n## Real Title\nBody", "file.md")).toBe("Real Title");
+    expect(extractTitle("*\nBody text", "my-note.org")).toBe("my-note");
+    expect(extractTitle("#+TITLE:\n* Heading\nBody", "file.org")).toBe("Heading");
+  });
+
+  test("extractTitle strips CRLF line endings from titles", () => {
+    expect(extractTitle("# My Title\r\nBody", "file.md")).toBe("My Title");
+    expect(extractTitle("#+TITLE: Org Title\r\nBody", "file.org")).toBe("Org Title");
+  });
 });
 
 // =============================================================================
