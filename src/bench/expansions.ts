@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -81,23 +82,59 @@ export type ExpansionGenerationSummary = {
   fallbacks: number;
 };
 
+/** Refuse to resume a partial produced by a different generator or query set. */
+function assertResumableIdentity(
+  partialPath: string,
+  metaPath: string,
+  identity: Record<string, string>,
+): void {
+  if (readFileSync(partialPath, "utf8").trim().length === 0) {
+    writeFileSync(metaPath, `${JSON.stringify({ identity }, null, 2)}\n`, "utf8");
+    return;
+  }
+  if (!existsSync(metaPath)) {
+    throw new Error(`Partial expansion artifact has no identity record; rerun with --force: ${partialPath}`);
+  }
+  let recorded: Record<string, string>;
+  try {
+    recorded = (JSON.parse(readFileSync(metaPath, "utf8")) as { identity: Record<string, string> }).identity;
+    if (typeof recorded !== "object" || recorded === null) throw new Error("missing identity");
+  } catch {
+    throw new Error(`Unreadable partial identity record; rerun with --force: ${metaPath}`);
+  }
+  const keys = [...new Set([...Object.keys(recorded), ...Object.keys(identity)])].sort();
+  const changed = keys.filter(key => recorded[key] !== identity[key]);
+  if (changed.length > 0) {
+    throw new Error(
+      `Partial expansion artifact was produced with a different ${changed.join(", ")}; `
+      + `rerun with --force: ${partialPath}`,
+    );
+  }
+}
+
 export async function generateExpansionArtifact(options: {
   benchmarkDir: string;
   runName: string;
   generateRaw: (query: string) => Promise<string>;
+  /** Everything that determines generated output (model, prompt, ...); a partial is resumed only on an exact match. */
+  identity: Record<string, string>;
   outputPath?: string;
   force?: boolean;
   onProgress?: (progress: ExpansionGenerationProgress) => void;
 }): Promise<ExpansionGenerationSummary> {
   const root = resolve(options.benchmarkDir);
   const runName = validateBenchmarkRunName(options.runName);
-  const queries = parseQueriesJsonl(
-    readFileSync(join(root, "queries.jsonl"), "utf8"),
-  );
+  const queriesBytes = readFileSync(join(root, "queries.jsonl"));
+  const queries = parseQueriesJsonl(queriesBytes.toString("utf8"));
+  const identity = {
+    ...options.identity,
+    queries_sha256: createHash("sha256").update(queriesBytes).digest("hex"),
+  };
   const outputPath = resolve(
     options.outputPath ?? join(root, "expansions", `${runName}.jsonl`),
   );
   const partialPath = `${outputPath}.partial`;
+  const metaPath = `${partialPath}.meta.json`;
   mkdirSync(dirname(outputPath), { recursive: true });
 
   if (existsSync(outputPath)) {
@@ -106,8 +143,12 @@ export async function generateExpansionArtifact(options: {
     }
     rmSync(outputPath);
   }
-  if (options.force) rmSync(partialPath, { force: true });
+  if (options.force) {
+    rmSync(partialPath, { force: true });
+    rmSync(metaPath, { force: true });
+  }
   if (!existsSync(partialPath)) writeFileSync(partialPath, "", "utf8");
+  assertResumableIdentity(partialPath, metaPath, identity);
 
   const partialText = readFileSync(partialPath, "utf8");
   const lineCount = partialText.split(/\r?\n/).filter(line => line.length > 0).length;
@@ -162,6 +203,7 @@ export async function generateExpansionArtifact(options: {
   const completedText = readFileSync(partialPath, "utf8");
   parseExpansionsJsonl(completedText, queries);
   renameSync(partialPath, outputPath);
+  rmSync(metaPath, { force: true });
 
   const count = (status: ExpansionStatus): number =>
     records.filter(record => record.status === status).length;

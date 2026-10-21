@@ -1068,7 +1068,8 @@ qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --check-index
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --run raw
 
 # Generate one frozen expansion artifact per model. Generation is sequential
-# and resumes from a validated .partial file after interruption.
+# and resumes from a validated .partial file after interruption, but only with
+# the same --model and an unchanged queries.jsonl; otherwise rerun with --force.
 npm run bench:expand -- \
   --benchmark finetune/benchmarks/qmd-expansion-scifact-v1 \
   --run upstream-qmd \

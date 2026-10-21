@@ -579,7 +579,9 @@ npm run bench:expand -- \
 
 生成器逐条保存模型原始输出，严格区分 `ok`、`format_error` 和
 `generation_error`，并在内容校验无可用 expansion 时记录 fallback。运行中每条
-query 都追加到 `.partial` 文件；再次执行同一命令会校验并跳过已完成的连续前缀，
+query 都追加到 `.partial` 文件，并在旁边的 `.partial.meta.json` 记录生成身份
+（`--model` 和 `queries.jsonl` 的 SHA-256）。再次执行同一命令时，只有身份完全一致
+才会校验并跳过已完成的连续前缀，否则直接报错、不生成任何内容；
 全部 300 条通过 `parseExpansionsJsonl()` 后再原子重命名为正式 JSONL。`--force`
 用于显式丢弃现有正式文件和 partial，从头生成。
 

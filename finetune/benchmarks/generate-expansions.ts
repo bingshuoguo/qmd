@@ -79,6 +79,7 @@ try {
     runName: values.run,
     force: values.force,
     generateRaw: query => llm.generateQueryExpansionRaw(query),
+    identity: { model: values.model },
     onProgress: renderProgress,
   });
   console.log(JSON.stringify({ model: values.model, ...summary }, null, 2));
