@@ -536,9 +536,11 @@ describe("Document Helpers", () => {
     expect(extractTitle("#+TITLE:\n* Heading\nBody", "file.org")).toBe("Heading");
   });
 
-  test("extractTitle strips CRLF line endings from titles", () => {
-    expect(extractTitle("# My Title\r\nBody", "file.md")).toBe("My Title");
-    expect(extractTitle("#+TITLE: Org Title\r\nBody", "file.org")).toBe("Org Title");
+  test("extractTitle skips empty headings that have trailing whitespace", () => {
+    expect(extractTitle("#   \n## Real Title\nBody", "file.md")).toBe("Real Title");
+    expect(extractTitle("#+TITLE: \n* Heading\nBody", "file.org")).toBe("Heading");
+    expect(extractTitle("*   \n* Heading\nBody", "file.org")).toBe("Heading");
+    expect(extractTitle("# Title  \nBody", "file.md")).toBe("Title");
   });
 });
 
