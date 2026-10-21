@@ -110,7 +110,7 @@ describe("offline expansion artifact generation", () => {
     });
 
     expect(generateRaw).toHaveBeenCalledOnce();
-    expect(generateRaw).toHaveBeenCalledWith("beta evidence");
+    expect(generateRaw).toHaveBeenCalledWith("beta evidence", "q2");
     expect(summary).toMatchObject({ total: 2, resumed: 1, generated: 1 });
     expect(existsSync(partial)).toBe(false);
     expect(existsSync(`${partial}.meta.json`)).toBe(false);
