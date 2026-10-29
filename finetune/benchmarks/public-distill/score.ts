@@ -10,7 +10,7 @@ import { loadBenchmarkV2, loadRetrievalProfile, parseQrelsTsv } from "../../../s
 import { scoreCanonicalRanking, averageCanonicalMetrics } from "../../../src/bench/score.js";
 import { createStore, retrieveForBenchmark } from "../../../src/store.js";
 import { applyLlamaEnvMitigation } from "../lib/cli.js";
-import { selectPublicCandidate } from "../lib/public-distill.js";
+import { selectByMetricOrder, selectPublicCandidate } from "../lib/public-distill.js";
 
 function sha256(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -45,7 +45,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 if (manifest.validated_sha256 !== sha256(validatedBytes)) throw new Error("validated.jsonl hash mismatch");
 if (manifest.generation_errors !== 0) throw new Error("Scoring requires generation_errors=0");
 const records = validatedBytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line));
-const expectedRecords = manifest.smoke_only === true ? 30 : 2500;
+const expectedRecords = manifest.smoke_only === true ? 30 : Number(manifest.generated_queries ?? 2500);
 if (records.length !== expectedRecords) {
   throw new Error(`Expected ${expectedRecords} validated records, got ${records.length}`);
 }
@@ -53,9 +53,22 @@ if (manifest.smoke_only !== true && diagnosticReducedIndex) {
   throw new Error("Formal runs require --index-scope formal");
 }
 
-const sourceIds = ["fiqa-train", "cqadup-programmers", "cqadup-unix"];
+// nf-freshstack runs take sources and winner order from their pool manifest;
+// v0 keeps its frozen sources and tie-aware selection.
+const pool: { sources: Record<string, string>; winner_metric_order: string[] } | null =
+  manifest.pipeline_version === "nf-freshstack-v1"
+    ? JSON.parse(readFileSync(resolve(publicRoot, manifest.pool_manifest_path), "utf8"))
+    : null;
+if (pool && Object.keys(pool.sources ?? {}).length === 0) {
+  throw new Error("nf-freshstack run requires source benchmark paths in the pool manifest");
+}
+const sourceRoots: Record<string, string> = pool
+  ? Object.fromEntries(Object.entries(pool.sources).map(([id, path]) => [id, resolve(publicRoot, path)]))
+  : Object.fromEntries(["fiqa-train", "cqadup-programmers", "cqadup-unix"].map(id => [id, join(preparedRoot, id)]));
+const sourceIds = Object.keys(sourceRoots).sort();
+const selectionOrder = pool?.winner_metric_order ?? ["recall_at_10", "ndcg_at_10", "mrr_at_10"];
 const sources = new Map(sourceIds.map(sourceId => {
-  const root = join(preparedRoot, sourceId);
+  const root = sourceRoots[sourceId]!;
   const benchmark = loadBenchmarkV2(root);
   const profile = loadRetrievalProfile(root, benchmark.manifest.cutoffs);
   const qrels = parseQrelsTsv(readFileSync(join(root, "qrels.tsv"), "utf8"));
@@ -74,6 +87,19 @@ const sources = new Map(sourceIds.map(sourceId => {
     docIdByPath: new Map(benchmark.documents.map(document => [document.path, document.doc_id])),
   }];
 }));
+// Record the retrieval settings actually used; every source must agree.
+const retrievalSettings = (profile: ReturnType<typeof loadRetrievalProfile>) => ({
+  result_limit: profile.result_limit,
+  per_list_limit: profile.per_list_limit,
+  candidate_limit: profile.candidate_limit,
+  rerank: profile.rerank,
+});
+const sharedRetrieval = retrievalSettings(sources.get(sourceIds[0]!)!.profile);
+for (const [sourceId, source] of sources) {
+  if (JSON.stringify(retrievalSettings(source.profile)) !== JSON.stringify(sharedRetrieval)) {
+    throw new Error(`${sourceId}: retrieval settings differ from ${sourceIds[0]}`);
+  }
+}
 const dbPath = resolve(values.db ?? join(runDir, "index.sqlite"));
 if (!existsSync(dbPath)) throw new Error(`Experiment index does not exist: ${dbPath}`);
 applyLlamaEnvMitigation();
@@ -145,12 +171,14 @@ try {
         candidate.retrieval = { status: "scored", ...result };
         admitted.push({ candidate_index: candidate.candidate_index, metrics: result.metrics });
       }
-      Object.assign(record, selectPublicCandidate({
-        sourceId: record.source_id,
-        qid: record.qid,
-        raw: raw.metrics,
-        candidates: admitted,
-      }));
+      Object.assign(record, pool
+        ? selectByMetricOrder({ order: pool.winner_metric_order, raw: raw.metrics, candidates: admitted })
+        : selectPublicCandidate({
+          sourceId: record.source_id,
+          qid: record.qid,
+          raw: raw.metrics,
+          candidates: admitted,
+        }));
     } catch (error) {
       record.selection_status = "retrieval_error";
       record.retrieval_error = error instanceof Error ? error.message : String(error);
@@ -178,12 +206,9 @@ try {
   manifest.selected_sha256 = sha256(readFileSync(selectedPath));
   manifest.selection_counts = counts;
   manifest.retrieval_profile = {
-    result_limit: 30,
-    per_list_limit: 30,
-    candidate_limit: 40,
-    rerank: true,
+    ...sharedRetrieval,
     auto_generate_expansions: false,
-    selection_order: ["recall_at_10", "ndcg_at_10", "mrr_at_10"],
+    selection_order: selectionOrder,
     diagnostic_reduced_index: diagnosticReducedIndex,
     final_sft_eligible: false,
   };
