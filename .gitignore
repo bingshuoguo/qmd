@@ -4,6 +4,7 @@ package-lock.json
 .npmrc
 .env.distill.local
 .env.distill.*.local
+/finetune/configs/distill/local/
 *.sqlite
 .DS_Store
 archive/
