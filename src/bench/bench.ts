@@ -18,8 +18,11 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -571,18 +574,27 @@ export function computeBenchmarkConfigSha256(
 
 export function computeGitDiffSha256(
   trackedDiff: string,
-  untrackedFiles: readonly { path: string; bytes: Uint8Array }[],
+  repoRoot: string,
+  untrackedPaths: readonly string[],
 ): string {
   const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
   hash.update("tracked\0", "utf8");
   hash.update(trackedDiff, "utf8");
-  for (const file of [...untrackedFiles].sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
-  )) {
+  for (const path of [...untrackedPaths].sort()) {
     hash.update("\0untracked\0", "utf8");
-    hash.update(file.path, "utf8");
+    hash.update(path, "utf8");
     hash.update("\0", "utf8");
-    hash.update(file.bytes);
+    const descriptor = openSync(join(repoRoot, path), "r");
+    try {
+      for (;;) {
+        const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      closeSync(descriptor);
+    }
   }
   return hash.digest("hex");
 }
@@ -600,14 +612,10 @@ function inspectGitState(): Pick<RunMetadata, "qmd_commit" | "qmd_dirty" | "qmd_
   const untrackedPaths = git(["ls-files", "--others", "--exclude-standard", "-z"])
     .split("\0")
     .filter(path => path.length > 0);
-  const untrackedFiles = untrackedPaths.map(path => ({
-    path,
-    bytes: readFileSync(join(repoRoot, path)),
-  }));
   return {
     qmd_commit: qmdCommit,
     qmd_dirty: true,
-    qmd_diff_sha256: computeGitDiffSha256(trackedDiff, untrackedFiles),
+    qmd_diff_sha256: computeGitDiffSha256(trackedDiff, repoRoot, untrackedPaths),
   };
 }
 
