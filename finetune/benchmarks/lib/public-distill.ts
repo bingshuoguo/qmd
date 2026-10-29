@@ -25,6 +25,42 @@ export function publicTieIndex(sourceId: string, qid: string, tiedCount: number)
   return Number(BigInt(`0x${digest}`) % BigInt(tiedCount));
 }
 
+/**
+ * Strict metric-order selection (nf-freshstack): the best candidate under
+ * `order` must beat raw; equal metrics resolve to the lower candidate_index,
+ * which `order` must state as its final tie-breaker. No qualified ties.
+ */
+export function selectByMetricOrder(options: {
+  order: readonly string[];
+  raw: CanonicalQueryMetrics;
+  candidates: { candidate_index: number; metrics: CanonicalQueryMetrics }[];
+}): { selection_status: PublicSelectionStatus; selected_candidate_index: number | null } {
+  const metrics = options.order.slice(0, -1) as (keyof CanonicalQueryMetrics)[];
+  if (options.order.at(-1) !== "lower_candidate_index" || metrics.length === 0) {
+    throw new Error(`winner order must list metrics then "lower_candidate_index": ${options.order.join(",")}`);
+  }
+  const compare = (left: CanonicalQueryMetrics, right: CanonicalQueryMetrics): number => {
+    for (const key of metrics) {
+      const a = left[key];
+      const b = right[key];
+      if (a === undefined || b === undefined) throw new Error(`missing metric ${key}`);
+      if (a !== b) return a > b ? 1 : -1;
+    }
+    return 0;
+  };
+  if (options.candidates.length === 0) {
+    return { selection_status: "no_valid_candidate", selected_candidate_index: null };
+  }
+  const ordered = [...options.candidates].sort((left, right) => left.candidate_index - right.candidate_index);
+  let selected = ordered[0]!;
+  for (const candidate of ordered.slice(1)) {
+    if (compare(candidate.metrics, selected.metrics) > 0) selected = candidate;
+  }
+  return compare(selected.metrics, options.raw) > 0
+    ? { selection_status: "winner", selected_candidate_index: selected.candidate_index }
+    : { selection_status: "no_winner", selected_candidate_index: null };
+}
+
 export function selectPublicCandidate(options: {
   sourceId: string;
   qid: string;

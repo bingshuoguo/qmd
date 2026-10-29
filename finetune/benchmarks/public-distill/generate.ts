@@ -33,16 +33,17 @@ const { values } = parseArgs({
     experiment: { type: "string", default: "public-smoke-v0" },
     root: { type: "string", default: "finetune/data/public-distill-v0" },
     pool: { type: "string", default: "smoke" },
+    "pool-path": { type: "string" },
+    "pool-manifest": { type: "string" },
     preflight: { type: "boolean", default: false },
     "retry-generation-errors": { type: "boolean", default: false },
   },
 });
 if (values.pool !== "smoke" && values.pool !== "main") throw new Error("--pool must be smoke or main");
 const smokeOnly = values.pool === "smoke";
-const expectedQueries = smokeOnly ? 30 : 2500;
 const root = resolve(values.root);
-const poolFilename = smokeOnly ? "pool-smoke.jsonl" : "pool-main.jsonl";
-const poolPath = join(root, "prepared", poolFilename);
+const poolFilename = values["pool-path"] ?? (smokeOnly ? "prepared/pool-smoke.jsonl" : "prepared/pool-main.jsonl");
+const poolPath = resolve(root, poolFilename);
 const poolBytes = readFileSync(poolPath);
 const pool = poolBytes.toString("utf8").trim().split("\n").map(line => JSON.parse(line)) as {
   input_id: string;
@@ -51,27 +52,36 @@ const pool = poolBytes.toString("utf8").trim().split("\n").map(line => JSON.pars
   query: string;
   sample_key: string;
 }[];
-if (pool.length !== expectedQueries) {
-  throw new Error(`${values.pool} pool must contain ${expectedQueries} inputs, got ${pool.length}`);
-}
 let poolManifestSha256: string | null = null;
+let poolManifest: Record<string, unknown> | null = null;
+let poolManifestFilename: string | null = null;
 if (!smokeOnly) {
-  const poolManifestPath = join(root, "prepared", "pool-main-manifest.json");
+  poolManifestFilename = values["pool-manifest"] ?? "prepared/pool-main-manifest.json";
+  const poolManifestPath = resolve(root, poolManifestFilename);
   const poolManifestBytes = readFileSync(poolManifestPath);
-  const poolManifest = JSON.parse(poolManifestBytes.toString("utf8"));
-  if (
-    poolManifest.status !== "frozen_pre_generation"
-    || poolManifest.total_count !== expectedQueries
-    || poolManifest.pool_sha256 !== sha256(poolBytes)
-    || poolManifest.smoke_overlap_count !== 0
-    || poolManifest.smoke_normalized_query_overlap_count !== 0
-    || poolManifest.holdout_overlap_count !== 0
-    || poolManifest.unique_input_id_count !== expectedQueries
-    || poolManifest.unique_normalized_query_count !== expectedQueries
-  ) {
+  const parsed = JSON.parse(poolManifestBytes.toString("utf8")) as Record<string, unknown>;
+  poolManifest = parsed;
+  const dynamicPool = parsed.version === "nf-freshstack-v1";
+  const validLegacyPool = parsed.status === "frozen_pre_generation"
+    && parsed.total_count === 2500
+    && parsed.smoke_overlap_count === 0
+    && parsed.smoke_normalized_query_overlap_count === 0
+    && parsed.holdout_overlap_count === 0
+    && parsed.unique_input_id_count === 2500
+    && parsed.unique_normalized_query_count === 2500;
+  const validDynamicPool = dynamicPool
+    && typeof parsed.total_count === "number"
+    && parsed.total_count > 0
+    && typeof parsed.sources === "object"
+    && parsed.sources !== null;
+  if ((!validLegacyPool && !validDynamicPool) || parsed.pool_sha256 !== sha256(poolBytes)) {
     throw new Error("Formal generation requires a valid frozen main pool manifest");
   }
   poolManifestSha256 = sha256(poolManifestBytes);
+}
+const expectedQueries = smokeOnly ? 30 : Number(poolManifest!.total_count);
+if (pool.length !== expectedQueries) {
+  throw new Error(`${values.pool} pool must contain ${expectedQueries} inputs, got ${pool.length}`);
 }
 const provider = process.env.DISTILL_PROVIDER;
 const model = process.env.DISTILL_MODEL;
@@ -98,10 +108,6 @@ if (maxOutputTokens !== 4096) throw new Error("Public distillation requires DIST
 const dirtyEntries = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" })
   .trim().split("\n").filter(Boolean)
   .filter(line => !line.slice(3).startsWith("finetune/data/public-distill-v0/"));
-if (!smokeOnly && dirtyEntries.length > 0) {
-  throw new Error(`Formal generation requires versioned, clean source files; dirty entries:\n${dirtyEntries.join("\n")}`);
-}
-
 const runDir = join(root, "experiments", values.experiment);
 const candidatesPath = join(runDir, "candidates.jsonl");
 const partialPath = `${candidatesPath}.partial`;
@@ -123,6 +129,9 @@ if (values.preflight) {
     qmd_dirty: dirtyEntries.length > 0,
   }, null, 2)}\n`);
   process.exit(0);
+}
+if (!smokeOnly && dirtyEntries.length > 0) {
+  throw new Error(`Formal generation requires versioned, clean source files; dirty entries:\n${dirtyEntries.join("\n")}`);
 }
 mkdirSync(runDir, { recursive: true });
 if (values["retry-generation-errors"]) {
@@ -231,10 +240,11 @@ if (!existsSync(manifestPath)) {
     created_at: new Date().toISOString(),
     qmd_commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     qmd_dirty: dirtyEntries.length > 0,
-    pool_path: `prepared/${poolFilename}`,
+    pool_path: poolFilename,
     pool_sha256: sha256(poolBytes),
-    pool_manifest_path: smokeOnly ? null : "prepared/pool-main-manifest.json",
+    pool_manifest_path: poolManifestFilename,
     pool_manifest_sha256: poolManifestSha256,
+    pipeline_version: poolManifest?.version ?? "qmd-public-v0",
     teacher_provider: provider,
     teacher_model: model,
     api_base_url: baseUrl,

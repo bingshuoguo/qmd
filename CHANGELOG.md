@@ -21,6 +21,13 @@
 
 ### Internal
 
+- nf-freshstack public distillation: formal runs take their input count,
+  source quotas, sources, and winner metric order from the frozen pool
+  manifest; the sealed `public-distill-v2` release renders the V1 student
+  prompt and records its template and hash, so `train_sft_v1.py` can load it.
+  Run manifests record the retrieval settings the source profiles actually
+  used, and index verification shares `verify_frozen_indexes.ts`.
+
 - VH inference profiles no longer inherit node-llama-cpp's default system
   prompt: `system_prompt` defaults to `""` to match the SFT training envelope,
   the profile's sampling block is now honored by `bench:expand` (instead of
