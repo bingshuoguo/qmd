@@ -21,6 +21,8 @@
 
 ### Internal
 
+- `qmd bench` hashes untracked fi
+
 - Keep the current DeepSeek JSON4 V2 and OpenAI V2 environment examples at the
   repository root; move six historical profiles to `finetune/configs/distill/legacy/`
   and keep spare local configurations in the ignored sibling `local/` directory.
