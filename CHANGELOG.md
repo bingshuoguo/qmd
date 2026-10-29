@@ -21,6 +21,10 @@
 
 ### Internal
 
+- Share Python artifact I/O across distillation, SFT releases, and teacher
+  qualification; remove unused path/state scaffolding and use the release's
+  V2-A prompt in evaluation so its bytes and identity have one source.
+
 - Generalize the SciFact-only BEIR prep into a multi-dataset framework
   (`finetune/benchmarks/lib/beir.ts` + `beir/scifact.ts` config), replacing
   `prepare-scifact.ts` and `generate-expansions.ts` with a shared `expand.ts`

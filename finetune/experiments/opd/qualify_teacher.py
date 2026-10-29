@@ -11,7 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from .contracts import SOURCES, atomic_json, atomic_jsonl, load_config, load_sealed_prompt
+from dataset.artifact_io import atomic_json, atomic_jsonl
+
+from .contracts import SOURCES, load_config, load_sealed_prompt
 from .generation import generate_arm
 from .run_retrieval import run_retrieval_arms
 from .technical_preflight import run_technical_preflight

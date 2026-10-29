@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import hashlib
 import json
 import os
 import re
@@ -16,18 +15,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from dataset.artifact_io import sha256_file
 from dataset.contract import CONTRACT_VERSION, validate_training_target
 
 
 DEFAULT_TOKENIZER_MODEL = "Qwen/Qwen3-1.7B"
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def source_label(path: Path, source_root: Path) -> str:

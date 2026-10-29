@@ -8,11 +8,12 @@ from typing import Any
 
 import yaml
 
-from .contracts import QualificationConfig, atomic_json, atomic_jsonl, load_config
+from dataset.artifact_io import atomic_json, atomic_jsonl
+
+from .contracts import SOURCES, QualificationConfig, load_config
 
 
 ARMS = ("raw", "merged-v2", "teacher")
-SOURCES = ("nfcorpus", "fiqa", "freshstack", "scifact")
 DEFAULT_QMD = ["node", "--import", "tsx", "src/cli/qmd.ts"]
 
 

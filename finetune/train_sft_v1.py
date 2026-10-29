@@ -24,7 +24,7 @@ from typing import Any
 import yaml
 
 from dataset.completion import tokenize_completion_example
-from dataset.public_distill import atomic_json, sha256_file
+from dataset.artifact_io import atomic_json, sha256_file
 from dataset.sft_release import (
     Release,
     assert_prompt_template,

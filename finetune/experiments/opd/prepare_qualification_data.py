@@ -11,15 +11,14 @@ from typing import Any
 
 import yaml
 
+from dataset.artifact_io import atomic_json, atomic_jsonl, sha256_file
+
 from .contracts import (
     PROMPT_SHA256,
     PROMPT_VERSION,
     QualificationConfig,
     REPO_ROOT,
-    atomic_json,
-    atomic_jsonl,
     load_config,
-    sha256_path,
 )
 from .data_audit import (
     audit_benchmark_rows,
@@ -121,7 +120,7 @@ def _directory_manifest_hash(root: Path, names: tuple[str, ...]) -> str:
     digest = hashlib.sha256()
     for name in sorted(names):
         path = root / name
-        digest.update(f"{name}\0{sha256_path(path)}\n".encode())
+        digest.update(f"{name}\0{sha256_file(path)}\n".encode())
     return digest.hexdigest()
 
 
@@ -183,16 +182,16 @@ def _write_scifact(config: QualificationConfig, output: Path, usage: dict[str, l
     }
     atomic_json(benchmark / "leakage-report.json", leakage)
     artifact_hashes = {
-        "queries_sha256": sha256_path(benchmark / "queries.jsonl"),
-        "qrels_sha256": sha256_path(benchmark / "qrels.tsv"),
-        "documents_sha256": sha256_path(benchmark / "documents.jsonl"),
+        "queries_sha256": sha256_file(benchmark / "queries.jsonl"),
+        "qrels_sha256": sha256_file(benchmark / "qrels.tsv"),
+        "documents_sha256": sha256_file(benchmark / "documents.jsonl"),
     }
     benchmark_manifest = {
         "benchmark_id": "qmd-opd-teacher-qualification-scifact-dev-v1",
         "source": {"url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip", "archive_md5": _hash_bytes(archive.read_bytes(), "md5"), "split": "train-derived-dev-seed-42"},
-        "source_qrels_sha256": sha256_path(benchmark / "source-qrels.tsv"),
-        "excluded_qids_sha256": sha256_path(benchmark / "excluded-qids.json"),
-        "leakage_report_sha256": sha256_path(benchmark / "leakage-report.json"),
+        "source_qrels_sha256": sha256_file(benchmark / "source-qrels.tsv"),
+        "excluded_qids_sha256": sha256_file(benchmark / "excluded-qids.json"),
+        "leakage_report_sha256": sha256_file(benchmark / "leakage-report.json"),
         "converted_data_sha256": _hash_bytes(json.dumps(artifact_hashes, sort_keys=True).encode()),
         "qrels": {"relevant_threshold": 1, "unjudged": "nonrelevant", "graded": False},
         "cutoffs": [1, 3, 5, 10, 20, 30],
@@ -216,7 +215,7 @@ def _write_scifact(config: QualificationConfig, output: Path, usage: dict[str, l
     source_manifest = {
         "source_id": "scifact",
         "archive": str(archive),
-        "archive_sha256": sha256_path(archive),
+        "archive_sha256": sha256_file(archive),
         "selection": leakage,
         "artifact_hashes": artifact_hashes,
     }
@@ -226,7 +225,7 @@ def _write_scifact(config: QualificationConfig, output: Path, usage: dict[str, l
         "source_id": "scifact",
         "benchmark_id": benchmark_manifest["benchmark_id"],
         "source_path": str(archive),
-        "source_sha256": sha256_path(archive),
+        "source_sha256": sha256_file(archive),
         "counts": counts,
         "queries": query_rows,
         "family_by_qid": {qid: family_by_qid[qid] for qid in selected},
@@ -280,8 +279,8 @@ def prepare_bundle(config: QualificationConfig, output_root: Path) -> dict[str, 
         "prompt_version": PROMPT_VERSION,
         "prompt_sha256": PROMPT_SHA256,
         "config": config.manifest(),
-        "queries_sha256": sha256_path(output_root / "queries.jsonl"),
-        "data_audit_sha256": sha256_path(output_root / "data-audit.json"),
+        "queries_sha256": sha256_file(output_root / "queries.jsonl"),
+        "data_audit_sha256": sha256_file(output_root / "data-audit.json"),
     }
     atomic_json(output_root / "evaluation-manifest.json", manifest)
     return data_audit

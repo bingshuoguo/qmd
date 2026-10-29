@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dataset.public_distill import read_jsonl, sha256_file
+from dataset.artifact_io import read_jsonl, sha256_file
 from dataset.public_distill_v1 import (
     EOS_TOKEN_ID,
     EXPERIMENT_ID,
