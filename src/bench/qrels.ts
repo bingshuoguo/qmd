@@ -11,10 +11,12 @@ import {
   type BenchmarkQrel,
   type BenchmarkQueryV2,
   type CanonicalMetric,
+  type ExpansionSchemaVersion,
   type ExpansionStatus,
   type ExpansionType,
   type LoadedBenchmarkV2,
   type RetrievalProfileV2,
+  type BenchmarkExpansionRecordVh,
 } from "./types.js";
 
 const ALLOWED_METRICS = new Set<CanonicalMetric>([
@@ -365,9 +367,27 @@ export function parseExpansionsJsonl(
   text: string,
   queries: BenchmarkQueryV2[],
 ): BenchmarkExpansionRecord[] {
+  return parseExpansionsJsonlVersioned(text, queries).records;
+}
+
+/**
+ * Parse an expansions artifact, auto-detecting its schema version.
+ *
+ * Records carrying a `generation` block must follow
+ * "qmd-expansion-vh-serving-v1": `fallback_used=true` is then allowed on
+ * non-ok records (VH fallback policy: empty expansions, error preserved).
+ * Legacy records without the block keep the old rule: non-ok implies empty
+ * output and `fallback_used=false`.
+ */
+export function parseExpansionsJsonlVersioned(
+  text: string,
+  queries: BenchmarkQueryV2[],
+): { schema_version: ExpansionSchemaVersion; records: BenchmarkExpansionRecord[] } {
   const queryById = new Map(queries.map(query => [query.qid, query]));
   const expansions: BenchmarkExpansionRecord[] = [];
   const seen = new Set<string>();
+  let sawVh = false;
+  let sawLegacy = false;
 
   for (const [index, value] of parseJsonLines(text, "expansions.jsonl").entries()) {
     const location = `expansions.jsonl:${index + 1}`;
@@ -409,20 +429,54 @@ export function parseExpansionsJsonl(
       throw new Error(`${location}: non-ok expansion must include an error reason`);
     }
     if (item.status !== "ok" && item.fallback_used !== false) {
-      throw new Error(`${location}: non-ok expansion must set fallback_used to false`);
+      if (!("generation" in item)) {
+        throw new Error(`${location}: non-ok expansion must set fallback_used to false`);
+      }
+      // VH serving schema: fallback_used=true with empty output is the
+      // documented fallback policy (error preserved, raw-query path).
     }
     if (item.status === "ok" && item.error !== null) {
       throw new Error(`${location}: ok expansion must use error: null`);
     }
-    expansions.push({
-      qid,
-      query: benchmarkQuery.query,
-      status: item.status as ExpansionStatus,
-      raw_output: item.raw_output,
-      output,
-      fallback_used: item.fallback_used,
-      error: item.error,
-    });
+    if (
+      item.status === "ok"
+      && item.fallback_used === true
+      && "generation" in item
+    ) {
+      throw new Error(`${location}: ok expansion must not set fallback_used`);
+    }
+
+    let recordOut: BenchmarkExpansionRecord;
+    if ("generation" in item) {
+      sawVh = true;
+      recordOut = parseVhGenerationMeta(item, location, {
+        qid,
+        query: benchmarkQuery.query,
+        status: item.status as ExpansionStatus,
+        raw_output: item.raw_output,
+        output,
+        fallback_used: item.fallback_used,
+        error: item.error,
+      });
+    } else {
+      sawLegacy = true;
+      recordOut = {
+        qid,
+        query: benchmarkQuery.query,
+        status: item.status as ExpansionStatus,
+        raw_output: item.raw_output,
+        output,
+        fallback_used: item.fallback_used,
+        error: item.error,
+      };
+    }
+    expansions.push(recordOut);
+  }
+
+  if (sawVh && sawLegacy) {
+    throw new Error(
+      "expansions.jsonl: mixed schema — records with and without a generation block",
+    );
   }
 
   for (const query of queries) {
@@ -430,5 +484,74 @@ export function parseExpansionsJsonl(
       throw new Error(`expansions.jsonl: missing qid "${query.qid}"`);
     }
   }
-  return expansions;
+  return {
+    schema_version: sawVh
+      ? "qmd-expansion-vh-serving-v1"
+      : "qmd-expansion-v1",
+    records: expansions,
+  };
+}
+
+const REQUIRED_GENERATION_FIELDS = [
+  "seed",
+  "stop_reason",
+  "generated_tokens",
+  "elapsed_ms",
+  "prompt_sha256",
+  "model_sha256",
+] as const;
+
+function parseVhGenerationMeta(
+  item: Record<string, unknown>,
+  location: string,
+  base: BenchmarkExpansionRecord,
+): BenchmarkExpansionRecordVh {
+  const generation = item.generation;
+  if (typeof generation !== "object" || generation === null || Array.isArray(generation)) {
+    throw new Error(`${location}.generation: expected an object`);
+  }
+  const gen = generation as Record<string, unknown>;
+  for (const field of REQUIRED_GENERATION_FIELDS) {
+    if (!(field in gen)) {
+      throw new Error(`${location}.generation.${field}: missing required field`);
+    }
+  }
+  if (typeof gen.seed !== "number" || !Number.isInteger(gen.seed)) {
+    throw new Error(`${location}.generation.seed: expected an integer`);
+  }
+  if (typeof gen.stop_reason !== "string" || gen.stop_reason.length === 0) {
+    throw new Error(`${location}.generation.stop_reason: expected a non-empty string`);
+  }
+  if (
+    typeof gen.generated_tokens !== "number"
+    || !Number.isInteger(gen.generated_tokens)
+    || gen.generated_tokens < 0
+  ) {
+    throw new Error(`${location}.generation.generated_tokens: expected a non-negative integer`);
+  }
+  if (typeof gen.elapsed_ms !== "number" || gen.elapsed_ms < 0) {
+    throw new Error(`${location}.generation.elapsed_ms: expected a non-negative number`);
+  }
+  for (const field of ["prompt_sha256", "model_sha256"] as const) {
+    if (typeof gen[field] !== "string" || !/^[0-9a-f]{64}$/.test(gen[field] as string)) {
+      throw new Error(`${location}.generation.${field}: expected a lowercase sha256 hex string`);
+    }
+  }
+  // Optional: artifacts written before resume pinned the profile lack it.
+  const profileSha256 = gen.profile_sha256 ?? null;
+  if (profileSha256 !== null && (typeof profileSha256 !== "string" || !/^[0-9a-f]{64}$/.test(profileSha256))) {
+    throw new Error(`${location}.generation.profile_sha256: expected null or a lowercase sha256 hex string`);
+  }
+  return {
+    ...base,
+    generation: {
+      seed: gen.seed as number,
+      stop_reason: gen.stop_reason as string,
+      generated_tokens: gen.generated_tokens as number,
+      elapsed_ms: gen.elapsed_ms as number,
+      prompt_sha256: gen.prompt_sha256 as string,
+      model_sha256: gen.model_sha256 as string,
+      profile_sha256: profileSha256,
+    },
+  };
 }

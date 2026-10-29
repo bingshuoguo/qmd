@@ -21,6 +21,14 @@
 
 ### Internal
 
+- VH inference profiles no longer inherit node-llama-cpp's default system
+  prompt: `system_prompt` defaults to `""` to match the SFT training envelope,
+  the profile's sampling block is now honored by `bench:expand` (instead of
+  hard-coded T=0.7), `repeat_penalty_last_tokens: 0` disables penalties, and
+  `quantization` may be `Q8_0` or `F16`.
+  Resuming a partial VH artifact now also requires the same seed and profile
+  hash, and `generated_tokens` counts every sampled token including EOG.
+
 - `qmd bench` hashes untracked files for `qmd_diff_sha256` by streaming them
   instead of reading every file into memory; the digest bytes are unchanged.
 
