@@ -21,7 +21,8 @@
 
 ### Internal
 
-- `qmd bench` hashes untracked fi
+- `qmd bench` hashes untracked files for `qmd_diff_sha256` by streaming them
+  instead of reading every file into memory; the digest bytes are unchanged.
 
 - Keep the current DeepSeek JSON4 V2 and OpenAI V2 environment examples at the
   repository root; move six historical profiles to `finetune/configs/distill/legacy/`
