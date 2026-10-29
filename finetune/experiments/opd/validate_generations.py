@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .contracts import atomic_json, atomic_jsonl
+from dataset.artifact_io import atomic_json, atomic_jsonl
 
 
 LINE = re.compile(r"(hyde|vec):[ \t]+(\S(?:.*\S)?)$")

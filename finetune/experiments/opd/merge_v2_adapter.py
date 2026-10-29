@@ -6,13 +6,9 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from .contracts import (
-    ADAPTER_SHA256,
-    atomic_json,
-    load_config,
-    load_sealed_prompt,
-    sha256_path,
-)
+from dataset.artifact_io import atomic_json, sha256_file
+
+from .contracts import ADAPTER_SHA256, load_config, load_sealed_prompt
 from .technical_preflight import merge_equivalence
 
 
@@ -25,7 +21,7 @@ PROBE_QUERIES = (
 
 def _tree_hashes(root: Path) -> dict[str, str]:
     return {
-        str(path.relative_to(root)): sha256_path(path)
+        str(path.relative_to(root)): sha256_file(path)
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
@@ -105,7 +101,7 @@ def check(config_path: Path) -> dict[str, Any]:
         "status": "configuration_valid",
         "model_id": config.merged_v2.model_id,
         "base_revision": config.merged_v2.revision,
-        "adapter_sha256": sha256_path(adapter_weights),
+        "adapter_sha256": sha256_file(adapter_weights),
         "prompt_version": prompt.version,
         "prompt_sha256": prompt.sha256,
         "gpu_merge_pending": True,

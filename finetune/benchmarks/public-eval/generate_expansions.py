@@ -27,12 +27,16 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from dataset.public_distill import atomic_json, atomic_jsonl, sha256_file
+from dataset.artifact_io import atomic_json, atomic_jsonl, sha256_file
 from dataset.public_distill_v1 import (
     PROMPT_VERSION as V1_PROMPT_VERSION,
     TOKENIZER_REVISION,
     expected_prompt as v1_expected_prompt,
     prompt_sha256 as v1_prompt_sha256,
+)
+from dataset.v2a_pareto_release import (
+    PROMPT_VERSION as V2A_PROMPT_VERSION,
+    V2A_PROMPT_TEMPLATE,
 )
 
 # === Prompt registry ====================================================
@@ -43,16 +47,6 @@ V2_VH_USER_TEMPLATE = (
     "hyde: <one hypothetical document passage>\n"
     "vec: <semantic search query>\n"
     "vec: <optional second complementary semantic search query>\n"
-    "Query: {query}"
-)
-
-V2A_USER_TEMPLATE = (
-    "/no_think You generate retrieval expansions for a search query.\n"
-    "Return exactly one hyde line followed by one or two vec lines.\n"
-    "Target 20-120 words for HyDE; use fewer for a simple query.\n"
-    "Preserve entities, versions, numbers, constraints, negation, comparison, and intent.\n"
-    "Do not invent unsupported facts, causal claims, laws, statistics, or definitions.\n"
-    "Make Vec queries complementary rather than duplicates.\n"
     "Query: {query}"
 )
 
@@ -67,9 +61,9 @@ PROMPT_REGISTRY = {
         "sha256": hashlib.sha256(V2_VH_USER_TEMPLATE.encode("utf-8")).hexdigest(),
     },
     "v2a-pareto": {
-        "version": "qmd-student-expansion-v3-vh-pareto-v1",
-        "template": V2A_USER_TEMPLATE,
-        "sha256": hashlib.sha256(V2A_USER_TEMPLATE.encode("utf-8")).hexdigest(),
+        "version": V2A_PROMPT_VERSION,
+        "template": V2A_PROMPT_TEMPLATE,
+        "sha256": hashlib.sha256(V2A_PROMPT_TEMPLATE.encode("utf-8")).hexdigest(),
     },
 }
 

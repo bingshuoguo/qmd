@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -13,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
+from dataset.artifact_io import atomic_json, atomic_jsonl, sha256_file
 from dataset.completion import split_rendered_text
 from dataset.contract import CONTRACT_VERSION, validate_training_target
 from dataset.schema import output_items_to_text
@@ -80,14 +80,6 @@ def validate_scifact_semantics(
     }
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def load_tokenizer(model: str, revision: str, local_files_only: bool) -> Any:
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("tokenizer revision must be a 40-character commit hash")
@@ -126,32 +118,6 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
             seen.add(qid)
             records.append(record)
     return records
-
-
-def atomic_write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 def validate_candidates(
@@ -265,7 +231,7 @@ def update_manifest(run_dir: Path, updates: dict[str, Any]) -> None:
     if not isinstance(manifest, dict):
         raise ValueError("manifest.json must contain an object")
     manifest.update(updates)
-    atomic_write_json(manifest_path, manifest)
+    atomic_json(manifest_path, manifest)
 
 
 def validate_command(args: argparse.Namespace, tokenizer: Any) -> None:
@@ -278,7 +244,7 @@ def validate_command(args: argparse.Namespace, tokenizer: Any) -> None:
         raise ValueError("candidates.jsonl does not match the generated artifact hash")
     counter = lambda text: len(tokenizer.encode(text, add_special_tokens=False))
     records = validate_candidates(read_jsonl(candidates_path), counter, args.semantic_gate)
-    atomic_write_jsonl(candidates_path, records)
+    atomic_jsonl(candidates_path, records)
     update_manifest(
         run_dir,
         {
@@ -327,7 +293,7 @@ def materialize_command(args: argparse.Namespace, tokenizer: Any) -> None:
     temporary = Path(tempfile.mkdtemp(prefix=".sft.", dir=run_dir))
     try:
         for split, records in prepared.items():
-            atomic_write_jsonl(temporary / f"{split}.jsonl", records)
+            atomic_jsonl(temporary / f"{split}.jsonl", records)
         os.replace(temporary, output_dir)
     except BaseException:
         for child in temporary.glob("*"):

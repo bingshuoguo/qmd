@@ -17,15 +17,12 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
+from dataset.artifact_io import atomic_json, atomic_jsonl, read_jsonl, sha256_file
 from dataset.contract import CONTRACT_VERSION, validate_training_target
 from dataset.public_distill import (
     TOKENIZER_MODEL,
     TOKENIZER_REVISION,
-    atomic_json,
-    atomic_jsonl,
     normalized,
-    read_jsonl,
-    sha256_file,
 )
 from dataset.schema import output_items_to_text
 from dataset.scifact_distill import load_tokenizer

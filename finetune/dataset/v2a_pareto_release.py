@@ -9,12 +9,16 @@ train/validation, and writes the sealed SFT release.
 from __future__ import annotations
 
 import hashlib
-import json
-import os
-import tempfile
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+# Keep direct script execution working alongside `python -m dataset...`.
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from dataset.artifact_io import atomic_json, atomic_jsonl, read_jsonl, sha256_file
 
 # === Paths ==============================================================
 
@@ -44,58 +48,11 @@ PROMPT_VERSION = "qmd-student-expansion-v3-vh-pareto-v1"
 RELEASE_ID = "public-distill-v3-vh-pareto"
 EXPERIMENT_ID = "public-main-v3-vh-pareto-prompt-v1"
 
-# === Frozen training config =============================================
-
-MAX_SEQ_LENGTH = 1024
-
 # === Helpers ============================================================
 
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    return sha256_hex(path.read_bytes())
-
-
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            records.append(json.loads(line))
-    return records
-
-
-def atomic_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(
-                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
-                )
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
-def atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 def split_hash(input_id: str) -> str:
@@ -147,10 +104,8 @@ def run(
     print("Loading semantic audit...")
     audit_records = read_jsonl(audit_raw_path)
     semantic_pass: set[str] = set()
-    semantic_status: dict[str, str] = {}
     for r in audit_records:
         sid = r["source_candidate_id"]
-        semantic_status[sid] = r.get("overall", "unknown")
         if r.get("overall") == "pass":
             semantic_pass.add(sid)
 

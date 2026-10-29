@@ -6,14 +6,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+from dataset.artifact_io import atomic_json, sha256_file
+
 from .contracts import (
     GenerationConfig,
     ModelConfig,
     PromptContract,
-    atomic_json,
     load_config,
     load_sealed_prompt,
-    sha256_path,
 )
 
 
@@ -192,7 +192,7 @@ def generate_arm(
         },
         "expected": len(queries),
         "completed": len(completed),
-        "output_sha256": sha256_path(output_path),
+        "output_sha256": sha256_file(output_path),
     }
     atomic_json(output_path.with_name(f"{output_path.stem}-manifest.json"), manifest)
     return manifest

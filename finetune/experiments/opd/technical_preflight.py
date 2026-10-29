@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import platform
 import re
@@ -10,7 +9,9 @@ from typing import Any, Iterable
 
 import numpy as np
 
-from .contracts import QualificationConfig, atomic_json, load_sealed_prompt
+from dataset.artifact_io import atomic_json
+
+from .contracts import QualificationConfig, load_sealed_prompt
 
 
 def assert_immutable_revision(revision: str | None) -> None:

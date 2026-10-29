@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
-import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +9,7 @@ from typing import Any, Literal
 import yaml
 
 from dataset import sft_release
+from dataset.artifact_io import sha256_file
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -90,19 +88,6 @@ class QualificationConfig:
         return _paths_to_strings(value)
 
 
-@dataclass(frozen=True)
-class ArtifactPaths:
-    root: Path
-
-    @property
-    def evaluation_manifest(self) -> Path:
-        return self.root / "evaluation-manifest.json"
-
-    @property
-    def decision(self) -> Path:
-        return self.root / "decision.json"
-
-
 def _paths_to_strings(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
@@ -116,14 +101,6 @@ def _paths_to_strings(value: Any) -> Any:
 def resolve_repo_path(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else REPO_ROOT / path
-
-
-def sha256_path(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_sealed_prompt(path: Path) -> PromptContract:
@@ -180,7 +157,7 @@ def load_config(
         raise ValueError("merged-v2 base revision does not match the sealed SFT run")
     if merged_raw.get("adapter_sha256") != ADAPTER_SHA256:
         raise ValueError("configured adapter sha256 does not match the sealed SFT run")
-    if sha256_path(adapter_weights) != ADAPTER_SHA256:
+    if sha256_file(adapter_weights) != ADAPTER_SHA256:
         raise ValueError("adapter weight sha256 does not match the configured value")
 
     revision_env = str(teacher_raw.get("revision_env", ""))
@@ -213,21 +190,3 @@ def load_config(
         statistics=statistics,
         sources={key: resolve_repo_path(str(value)) for key, value in source_raw.items()},
     )
-
-
-def atomic_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-        handle.write(data)
-        temporary = Path(handle.name)
-    temporary.replace(path)
-
-
-def atomic_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-        handle.write(data)
-        temporary = Path(handle.name)
-    temporary.replace(path)
