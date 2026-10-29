@@ -21,6 +21,10 @@
 
 ### Internal
 
+- Keep the current DeepSeek JSON4 V2 and OpenAI V2 environment examples at the
+  repository root; move six historical profiles to `finetune/configs/distill/legacy/`
+  and keep spare local configurations in the ignored sibling `local/` directory.
+
 - Share Python artifact I/O across distillation, SFT releases, and teacher
   qualification; remove unused path/state scaffolding and use the release's
   V2-A prompt in evaluation so its bytes and identity have one source.

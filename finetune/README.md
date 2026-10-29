@@ -300,8 +300,11 @@ uv run python -m dataset.scifact_distill materialize \
 Responses-API teacher prompts are environment-configurable. For the checked-in
 GPT V2 RAG prompt, copy `.env.distill.openai-v2.example` to the ignored local
 file `.env.distill.local`, then add `DISTILL_API_KEY` and the compatible
-`DISTILL_RESPONSES_ENDPOINT`. The older inline `.env.distill.v1.example` and
-`.env.distill.v2.example` remain available for reproducing earlier profiles.
+`DISTILL_RESPONSES_ENDPOINT`. Historical profiles, including the older inline
+`.env.distill.v1.example` and `.env.distill.v2.example`, live under
+`finetune/configs/distill/legacy/`. See
+[distillation configuration](configs/distill/README.md) for the inventory and
+restore instructions. Select these environment files from the repository root.
 The generator reads:
 
 - `DISTILL_PROMPT_VERSION`: semantic version/id recorded in the run manifest;
@@ -319,7 +322,8 @@ Prompt from being mislabeled with a v2 version and avoids `.env` quote
 truncation. The output-budget variable is independent.
 
 DeepSeek uses the OpenAI-compatible Chat Completions protocol, not the
-Responses API. Copy `.env.distill.deepseek-v2.example` to `.env.distill.local`
+Responses API. Copy
+`finetune/configs/distill/legacy/.env.distill.deepseek-v2.example` to `.env.distill.local`
 and set the local key. V2 is the general-purpose, semantics-preserving teacher
 Prompt; the V1 example and Prompt files remain available for reproducible A/B
 comparison. The provider resolves
@@ -330,7 +334,8 @@ manifest. Distillation defaults to `DISTILL_THINKING_MODE=disabled`; when
 enabled, DeepSeek accepts only `--reasoning-effort high|max`.
 
 SciFact V3 is a separate experiment profile; it does not replace the
-general-purpose V2 Prompt. Copy `.env.distill.deepseek-v3.example` for a
+general-purpose V2 Prompt. Copy
+`finetune/configs/distill/legacy/.env.distill.deepseek-v3.example` to `.env.distill.local` for a
 teacher that treats every SciFact input as an unverified scientific claim and
 requests exactly 3 lex + 3 vec + 1 HyDE. Its post-generation gate is opt-in and
 **observational only** — it records but never rejects:
