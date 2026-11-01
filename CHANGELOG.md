@@ -6,6 +6,13 @@
 
 - Dependencies: `node-llama-cpp` 3.18.1 → **3.20.0** (llama.cpp b8390 → b10361), plus `picomatch` 4.0.5, `web-tree-sitter` 0.26.12, `tsx` 4.23.12, `vitest` 3.2.7 (cherry-picked from upstream #891). node-llama-cpp ≥3.19 no longer applies a second sigmoid to Qwen3 reranker output, which llama.cpp already softmax-normalizes; rerank scores now span [0, 1] instead of being squashed into [0.5, 0.731].
 - `generate` and query expansion now await `LlamaContextSequence.dispose()` before disposing the parent context. node-llama-cpp 3.20 made sequence dispose async; the library's context-onDispose path does not wait.
+- Reranked `query` / `structuredSearch` results are now ordered by rank fusion of the
+  RRF order and the reranker order, `1/(60+rrf_rank) + 1/(60+rerank_rank)`, replacing the
+  position-aware score blend (75/60/40% RRF weight by rank band), which was non-monotonic in
+  RRF rank. `score` is the fusion score normalized to (0, 1] (≈0.61 for the last of 40
+  candidates), so existing `minScore` thresholds need re-tuning; `--explain` now reports
+  `rerankRank` instead of the blend weight. On FiQA/SciFact/CQADup-Android this raised macro
+  nDCG@10 from 0.539 (blend) to 0.588 (end-to-end `qmd bench`, rerank on, no expansion).
 
 ### Added
 

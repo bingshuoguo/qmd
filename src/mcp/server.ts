@@ -158,7 +158,7 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   lines.push("");
   lines.push("Tips:");
   lines.push("  - File paths in results are relative to their collection.");
-  lines.push("  - Use `minScore: 0.5` to filter low-confidence results.");
+  lines.push("  - Reranked `query` scores are rank-fusion scores (~0.6–1.0); `minScore: 0.8` keeps documents both retrieval and the reranker place in roughly their top 15.");
   lines.push("  - Results include a `context` field describing the content type.");
 
   return lines.join("\n");
