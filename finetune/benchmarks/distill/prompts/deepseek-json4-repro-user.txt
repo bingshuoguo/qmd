@@ -1,0 +1,1 @@
+Expand this search query and return JSON: {{query}}
