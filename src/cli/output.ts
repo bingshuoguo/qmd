@@ -276,7 +276,9 @@ function outputResults(results: OutputRow[], query: string, opts: OutputOptions)
 
         console.log(`${c.dim}Explain: fts=[${ftsScores}] vec=[${vecScores}]${c.reset}`);
         console.log(`${c.dim}  RRF: total=${formatExplainNumber(explain.rrf.totalScore)} base=${formatExplainNumber(explain.rrf.baseScore)} bonus=${formatExplainNumber(explain.rrf.topRankBonus)} rank=${explain.rrf.rank}${c.reset}`);
-        console.log(`${c.dim}  Blend: ${Math.round(explain.rrf.weight * 100)}%*${formatExplainNumber(explain.rrf.positionScore)} + ${Math.round((1 - explain.rrf.weight) * 100)}%*${formatExplainNumber(explain.rerankScore)} = ${formatExplainNumber(explain.blendedScore)}${c.reset}`);
+        console.log(explain.rerankRank > 0
+          ? `${c.dim}  Fusion: rrf#${explain.rrf.rank} + rerank#${explain.rerankRank} (rerank=${formatExplainNumber(explain.rerankScore)}) = ${formatExplainNumber(explain.blendedScore)}${c.reset}`
+          : `${c.dim}  No rerank: score = 1/rrf#${explain.rrf.rank} = ${formatExplainNumber(explain.blendedScore)}${c.reset}`);
         if (contribSummary.length > 0) {
           console.log(`${c.dim}  Top RRF contributions: ${contribSummary}${c.reset}`);
         }

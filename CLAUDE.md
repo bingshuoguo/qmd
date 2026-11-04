@@ -149,6 +149,13 @@ npx vitest run --reporter=verbose test/
 bun test --preload ./src/test-preload.ts test/
 ```
 
+### Temporary test policy
+
+Agent-generated unit tests are temporary verification artifacts. Run them while
+implementing a change, then remove the added test files and test-only edits
+before committing. Do not add generated unit tests to Git unless the user
+explicitly asks to retain them.
+
 ## Architecture
 
 - SQLite FTS5 for full-text search (BM25)
