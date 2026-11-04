@@ -1,4 +1,4 @@
 exit: 0
 --- stderr ---
 --- stdout ---
-qmd <VERSION> (<COMMIT>)
+qmd <VERSION> (1ff6e41-dirty)

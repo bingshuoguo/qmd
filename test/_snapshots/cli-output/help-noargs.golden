@@ -16,10 +16,11 @@ Primary commands:
   qmd skills list/get/path      - List and retrieve bundled runtime skills
   qmd skill show/install        - Show or install the QMD skill
   qmd mcp                       - Start the MCP server (stdio transport for AI agents)
-  qmd bench <fixture-or-dir>    - Run legacy or qrels search quality benchmarks
+  qmd bench <fixture.json>      - Run search quality benchmarks against a fixture file
 
 Collections & context:
   qmd collection add/list/remove/rename/show   - Manage indexed folders
+  qmd collection metadata [name] [--match J]   - Discover metadata keys and values to filter on
   qmd context add/list/rm                      - Attach human-written summaries
   qmd ls [collection[/path]]                   - Inspect indexed files
 
@@ -27,11 +28,13 @@ Maintenance:
   qmd init                      - Create a project-local .qmd index
   qmd status                    - View index + collection health
   qmd update [--pull]           - Re-index collections (optionally git pull first)
+  qmd trust [list|revoke]       - Approve a checked-in .qmd config's hooks/paths/models
   qmd embed [-f] [-c <name>]    - Generate/refresh vector embeddings
     --max-docs-per-batch <n>    - Cap docs loaded into memory per embedding batch
     --max-batch-mb <n>          - Cap UTF-8 MB loaded into memory per embedding batch
     --timeout <minutes>         - Embed session cap in minutes (0 = no limit; default 30)
-  qmd cleanup                   - Clear caches, vacuum DB
+  qmd pull [--refresh] [--progress] - Download embedding/generation/rerank models
+  qmd cleanup [--dry-run]       - Drop inactive docs/orphans, compact FTS, vacuum
 
 Query syntax (qmd query):
   QMD queries are either a single expand query (no prefix) or a multi-line
@@ -86,9 +89,12 @@ Search options:
   --no-line-numbers          - Disable line numbers for get/multi-get
   --full-path                - Show on-disk paths instead of qmd:// + docid (get/multi-get/search/query)
                                 Paths are ./-prefixed when under $PWD, absolute otherwise
+                                Results whose file is gone keep qmd:// + docid and warn on stderr
   --explain                  - Include retrieval score traces (query, CLI/--format json)
   --format <kind>            - Output format: cli (default) | json | csv | md | xml | files
   -c, --collection <name>    - Filter by one or more collections
+  --filter <json>            - Metadata filter (recursive JSON AST; search/vsearch/query)
+                                e.g. '{"field":"status","operator":"eq","value":"published"}'
 
 Embed/query options:
   --chunk-strategy <auto|regex> - Chunking mode (default: regex; auto uses AST for code files)

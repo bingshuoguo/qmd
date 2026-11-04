@@ -190,7 +190,7 @@ export function parseDistillRecords(text: string): SciFactDistillRecord[] {
     } catch (error) {
       throw new Error(`candidates.jsonl:${index + 1}: invalid JSON`, { cause: error });
     }
-    validateDistillRecordShape(record);
+    validateDistillRecord(record);
     if (seen.has(record.qid)) throw new Error(`candidates.jsonl: duplicate qid "${record.qid}"`);
     seen.add(record.qid);
     records.push(record);
@@ -349,7 +349,7 @@ export function assertQidPrefix(
   }
 }
 
-export function validateDistillRecordShape(record: SciFactDistillRecord): void {
+export function validateDistillRecord(record: SciFactDistillRecord): void {
   if (!record.qid || !record.query) throw new Error("distill record needs qid and query");
   if (record.split !== "train" && record.split !== "val") {
     throw new Error(`qid ${record.qid}: split must be train or val`);

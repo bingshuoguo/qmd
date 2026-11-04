@@ -227,6 +227,7 @@ export function validateBenchmarkManifest(
     }
     seenMetrics.add(metric);
   }
+  // oxlint-disable-next-line anti-slop/no-chained-type-assertions -- every field is exhaustively validated above; the two-step cast is the boundary narrowing.
   return manifest as unknown as BenchmarkManifestV2;
 }
 

@@ -19,7 +19,7 @@ import {
   INTENT_WEIGHT_SNIPPET,
   INTENT_WEIGHT_CHUNK,
 } from "../src/store.js";
-import { parseStructuredQuery } from "../src/cli/commands/search.js";
+import { parseStructuredQuery } from "../src/cli/qmd.ts";
 
 // =============================================================================
 // extractIntentTerms
