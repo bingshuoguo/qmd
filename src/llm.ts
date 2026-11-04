@@ -14,12 +14,26 @@ import type {
 type StdoutChunk = string | Uint8Array;
 type WriteCallback = (err?: Error | null) => void;
 
+/** Structured generation metadata for one expansion response. */
+export type QueryExpansionGenerationMeta = {
+  /** Real stop reason from the engine ("eogToken" | "maxTokens" | "stopGenerationTrigger" | "abort" | ...). */
+  stop_reason: string;
+  /** Number of tokens actually produced by the engine (includes the EOG token when it stopped on one). */
+  generated_tokens: number;
+  /** Wall-clock generation time in milliseconds. */
+  elapsed_ms: number;
+};
+
 type NodeLlamaCppModule = {
   getLlama: (options: Record<string, unknown>) => Promise<Llama>;
   getLlamaGpuTypes?: (include?: "supported" | "allValid") => Promise<LlamaGpuMode[]>;
   resolveModelFile: (model: string, cacheDir: string) => Promise<string>;
   LlamaChatSession: new (options: { contextSequence: unknown }) => {
     prompt: (prompt: string, options?: Record<string, unknown>) => Promise<string>;
+    promptWithMeta: (
+      prompt: string,
+      options?: Record<string, unknown>,
+    ) => Promise<{ responseText: string; stopReason: string }>;
   };
   LlamaLogLevel: { error: unknown };
 };
@@ -1492,24 +1506,42 @@ export class LlamaCpp implements LLM {
   // ==========================================================================
 
   /**
-   * Generate one grammar-constrained expansion response without parsing or
-   * fallback. Benchmark artifact generation uses this to preserve the exact
-   * model output and classify failures outside the production search path.
+   * Structured generation metadata for one expansion response.
    */
-  async generateQueryExpansionRaw(
+  async generateQueryExpansionWithMeta(
     query: string,
-    options: { intent?: string } = {},
-  ): Promise<string> {
+    options: {
+      intent?: string;
+      promptTemplate?: string;
+      grammar?: string;
+      seed?: number;
+      maxTokens?: number;
+      /** Omit to keep node-llama-cpp's default system prompt. */
+      systemPrompt?: string;
+      sampling?: {
+        temperature: number;
+        topK: number;
+        topP: number;
+        presencePenalty: number;
+        /** 0 disables the repeat penalty. */
+        lastTokens: number;
+      };
+    } = {},
+  ): Promise<{ text: string; meta: QueryExpansionGenerationMeta }> {
     if (this._ciMode) throw new Error("LLM operations are disabled in CI (set CI=true)");
     this.touchActivity();
 
     const llama = await this.ensureLlama();
     await this.ensureGenerateModel();
-    const prompt = options.intent
-      ? `/no_think Expand this search query: ${query}\nQuery intent: ${options.intent}`
-      : `/no_think Expand this search query: ${query}`;
+    // Callers may pin a full prompt template (e.g. the V2-VH serving profile);
+    // {query} is replaced when the template contains it.
+    const prompt = options.promptTemplate
+      ? options.promptTemplate.replace("{query}", query)
+      : options.intent
+        ? `/no_think Expand this search query: ${query}\nQuery intent: ${options.intent}`
+        : `/no_think Expand this search query: ${query}`;
     const grammar = await llama.createGrammar({
-      grammar: `
+      grammar: options.grammar ?? `
         root ::= line+
         line ::= type ": " content "\\n"
         type ::= "lex" | "vec" | "hyde"
@@ -1521,24 +1553,56 @@ export class LlamaCpp implements LLM {
     });
     let sequence: { dispose: () => void | Promise<void> } | undefined;
     try {
-      sequence = context.getSequence();
+      const contextSequence = context.getSequence();
+      sequence = contextSequence;
       const { LlamaChatSession } = await loadNodeLlamaCpp();
-      const session = new LlamaChatSession({ contextSequence: sequence });
-      return await session.prompt(prompt, {
-        grammar,
-        maxTokens: 600,
-        temperature: 0.7,
-        topK: 20,
-        topP: 0.8,
-        repeatPenalty: {
-          lastTokens: 64,
-          presencePenalty: 0.5,
-        },
+      const session = new LlamaChatSession({
+        contextSequence,
+        ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
       });
+      const sampling = options.sampling
+        ?? { temperature: 0.7, topK: 20, topP: 0.8, presencePenalty: 0.5, lastTokens: 64 };
+      // Count tokens actually sampled by the engine, including any trailing
+      // EOG token: onToken and re-tokenizing responseText both miss it. The
+      // meter's output count is one per sampling step on this fresh sequence.
+      const outputTokensBefore = contextSequence.tokenMeter.usedOutputTokens;
+      const start = performance.now();
+      const result = await session.promptWithMeta(prompt, {
+        grammar,
+        maxTokens: options.maxTokens ?? 600,
+        temperature: sampling.temperature,
+        topK: sampling.topK,
+        topP: sampling.topP,
+        repeatPenalty: sampling.lastTokens > 0
+          ? { lastTokens: sampling.lastTokens, presencePenalty: sampling.presencePenalty }
+          : false,
+        ...(options.seed !== undefined && { seed: options.seed }),
+      });
+      return {
+        text: result.responseText,
+        meta: {
+          stop_reason: result.stopReason,
+          generated_tokens: contextSequence.tokenMeter.usedOutputTokens - outputTokensBefore,
+          elapsed_ms: Math.round(performance.now() - start),
+        },
+      };
     } finally {
       // Sequence dispose is async as of node-llama-cpp 3.20; await it before the parent context.
       await disposeSequenceThenContext(sequence, context);
     }
+  }
+
+  /**
+   * Generate one grammar-constrained expansion response without parsing or
+   * fallback. Benchmark artifact generation uses this to preserve the exact
+   * model output and classify failures outside the production search path.
+   */
+  async generateQueryExpansionRaw(
+    query: string,
+    options: { intent?: string } = {},
+  ): Promise<string> {
+    const { text } = await this.generateQueryExpansionWithMeta(query, options);
+    return text;
   }
 
   async expandQuery(query: string, options: { context?: string, includeLexical?: boolean, intent?: string } = {}): Promise<Queryable[]> {

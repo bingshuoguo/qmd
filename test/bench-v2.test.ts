@@ -370,17 +370,16 @@ describe("v2 runner artifacts", () => {
       QMD_EMBED_PARALLELISM: "2",
     })).not.toBe(firstConfig);
 
-    const files = [
-      { path: "z.txt", bytes: Buffer.from("z") },
-      { path: "a.txt", bytes: Buffer.from("a") },
-    ];
-    const firstDiff = computeGitDiffSha256("tracked", files);
-    expect(computeGitDiffSha256("tracked", [...files].reverse())).toBe(firstDiff);
-    expect(computeGitDiffSha256("changed", files)).not.toBe(firstDiff);
-    expect(computeGitDiffSha256("tracked", [
-      files[0]!,
-      { path: "a.txt", bytes: Buffer.from("changed") },
-    ])).not.toBe(firstDiff);
+    const repoRoot = mkdtempSync(join(tmpdir(), "qmd-bench-v2-diff-"));
+    temporaryDirectories.push(repoRoot);
+    writeFileSync(join(repoRoot, "z.txt"), "z");
+    writeFileSync(join(repoRoot, "a.txt"), "a");
+    const paths = ["z.txt", "a.txt"];
+    const firstDiff = computeGitDiffSha256("tracked", repoRoot, paths);
+    expect(computeGitDiffSha256("tracked", repoRoot, [...paths].reverse())).toBe(firstDiff);
+    expect(computeGitDiffSha256("changed", repoRoot, paths)).not.toBe(firstDiff);
+    writeFileSync(join(repoRoot, "a.txt"), "changed");
+    expect(computeGitDiffSha256("tracked", repoRoot, paths)).not.toBe(firstDiff);
   });
 
   test("missing index fails without creating a SQLite file", async () => {

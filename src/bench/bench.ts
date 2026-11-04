@@ -17,10 +17,15 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+  appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -569,18 +574,27 @@ export function computeBenchmarkConfigSha256(
 
 export function computeGitDiffSha256(
   trackedDiff: string,
-  untrackedFiles: readonly { path: string; bytes: Uint8Array }[],
+  repoRoot: string,
+  untrackedPaths: readonly string[],
 ): string {
   const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
   hash.update("tracked\0", "utf8");
   hash.update(trackedDiff, "utf8");
-  for (const file of [...untrackedFiles].sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
-  )) {
+  for (const path of [...untrackedPaths].sort()) {
     hash.update("\0untracked\0", "utf8");
-    hash.update(file.path, "utf8");
+    hash.update(path, "utf8");
     hash.update("\0", "utf8");
-    hash.update(file.bytes);
+    const descriptor = openSync(join(repoRoot, path), "r");
+    try {
+      for (;;) {
+        const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      closeSync(descriptor);
+    }
   }
   return hash.digest("hex");
 }
@@ -598,14 +612,10 @@ function inspectGitState(): Pick<RunMetadata, "qmd_commit" | "qmd_dirty" | "qmd_
   const untrackedPaths = git(["ls-files", "--others", "--exclude-standard", "-z"])
     .split("\0")
     .filter(path => path.length > 0);
-  const untrackedFiles = untrackedPaths.map(path => ({
-    path,
-    bytes: readFileSync(join(repoRoot, path)),
-  }));
   return {
     qmd_commit: qmdCommit,
     qmd_dirty: true,
-    qmd_diff_sha256: computeGitDiffSha256(trackedDiff, untrackedFiles),
+    qmd_diff_sha256: computeGitDiffSha256(trackedDiff, repoRoot, untrackedPaths),
   };
 }
 
@@ -966,17 +976,44 @@ export async function runBenchmarkV2(
     const documentIdByPath = new Map(
       benchmark.documents.map(document => [document.path, document.doc_id]),
     );
-    const queryResults: CanonicalQueryResult[] = [];
-    let formatErrorCount = 0;
-    let generationErrorCount = 0;
-    let fallbackCount = 0;
-    let expansionPassCount = 0;
-    let retrievalErrorCount = 0;
+    const id = runId(options.run, options.model, options.only);
+    const resultsRelative = `runs/results/${id}.jsonl`;
+    const resultsPath = join(root, ...resultsRelative.split("/"));
+    const partialPath = `${resultsPath}.partial`;
+    mkdirSync(dirname(resultsPath), { recursive: true });
+    if (!existsSync(partialPath)) writeFileSync(partialPath, "", "utf8");
+    const partialLines = readFileSync(partialPath, "utf8").split("\n");
+    if (partialLines.at(-1) === "") {
+      partialLines.pop();
+    } else {
+      try {
+        JSON.parse(partialLines.at(-1)!);
+      } catch {
+        partialLines.pop();
+      }
+      writeFileSync(partialPath, `${partialLines.join("\n")}${partialLines.length ? "\n" : ""}`, "utf8");
+    }
+    const queryResults = partialLines
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line) as CanonicalQueryResult);
+    for (let index = 0; index < queryResults.length; index++) {
+      if (queryResults[index]!.qid !== benchmark.queries[index]?.qid) {
+        throw new Error(`Partial benchmark results are not a valid qid prefix: ${partialPath}`);
+      }
+    }
+    if (queryResults.length > benchmark.queries.length) {
+      throw new Error(`Partial benchmark results exceed query count: ${partialPath}`);
+    }
+    let formatErrorCount = queryResults.filter(r => r.expansion_status === "format_error").length;
+    let generationErrorCount = queryResults.filter(r => r.expansion_status === "generation_error").length;
+    let fallbackCount = queryResults.filter(r => r.fallback_used).length;
+    let expansionPassCount = queryResults.filter(r => r.expansion_status === "ok").length;
+    let retrievalErrorCount = queryResults.filter(r => r.retrieval_status === "error").length;
     const total = benchmark.queries.length;
     const runStartedAt = performance.now();
 
     reportBenchmarkProgress(onProgress, {
-      completed: 0,
+      completed: queryResults.length,
       total,
       elapsed_ms: 0,
       eta_ms: null,
@@ -985,7 +1022,7 @@ export async function runBenchmarkV2(
       error_count: 0,
     });
 
-    for (let queryIndex = 0; queryIndex < total; queryIndex++) {
+    for (let queryIndex = queryResults.length; queryIndex < total; queryIndex++) {
       const query = benchmark.queries[queryIndex]!;
       const expansionRecord = recordsByQid.get(query.qid);
       if (expansionRecord?.status === "ok") expansionPassCount++;
@@ -1073,6 +1110,11 @@ export async function runBenchmarkV2(
             : [],
         });
       }
+      appendFileSync(
+        partialPath,
+        `${JSON.stringify(queryResults[queryResults.length - 1])}\n`,
+        "utf8",
+      );
       const completed = queryIndex + 1;
       const elapsedMs = performance.now() - runStartedAt;
       reportBenchmarkProgress(onProgress, {
@@ -1105,15 +1147,7 @@ export async function runBenchmarkV2(
         ...averageCanonicalMetrics(successfulMetrics, benchmark.manifest.cutoffs),
         ...expansionRates,
       } satisfies BenchmarkRunMetrics;
-    const id = runId(options.run, options.model, options.only);
-    const resultsRelative = `runs/results/${id}.jsonl`;
-    const resultsPath = join(root, ...resultsRelative.split("/"));
-    mkdirSync(dirname(resultsPath), { recursive: true });
-    writeFileSync(
-      resultsPath,
-      `${queryResults.map(result => JSON.stringify(result)).join("\n")}\n`,
-      "utf8",
-    );
+    renameSync(partialPath, resultsPath);
     const indexManifestBytes = readFileSync(join(root, "index-manifest.json"));
     const run: BenchmarkRunV2 = {
       run_id: id,

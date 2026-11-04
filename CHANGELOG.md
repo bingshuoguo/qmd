@@ -6,27 +6,42 @@
 
 - Dependencies: `node-llama-cpp` 3.18.1 → **3.20.0** (llama.cpp b8390 → b10361), plus `picomatch` 4.0.5, `web-tree-sitter` 0.26.12, `tsx` 4.23.12, `vitest` 3.2.7 (cherry-picked from upstream #891). node-llama-cpp ≥3.19 no longer applies a second sigmoid to Qwen3 reranker output, which llama.cpp already softmax-normalizes; rerank scores now span [0, 1] instead of being squashed into [0.5, 0.731].
 - `generate` and query expansion now await `LlamaContextSequence.dispose()` before disposing the parent context. node-llama-cpp 3.20 made sequence dispose async; the library's context-onDispose path does not wait.
-
-### Fixed
-
-- Title extraction no longer uses the next line as the title when a Markdown
-  (`#`, `##`) or Org (`*`, `#+TITLE:`) heading is empty. It falls through to the
-  next real heading or the filename instead. Existing titles change only when a
-  document is re-indexed.
-- `npm run bench:expand` no longer resumes an interrupted `.partial` produced
-  by a different model or a changed `queries.jsonl`, which previously mixed
-  stale expansions into the new artifact. The generator identity is recorded
-  next to the partial and must match exactly; a pre-existing partial without
-  that record is rejected (rerun with `--force`).
+- Reranked `query` / `structuredSearch` results are now ordered by rank fusion of the
+  RRF order and the reranker order, `1/(60+rrf_rank) + 1/(60+rerank_rank)`, replacing the
+  position-aware score blend (75/60/40% RRF weight by rank band), which was non-monotonic in
+  RRF rank. `score` is the fusion score normalized to (0, 1] (≈0.61 for the last of 40
+  candidates), so existing `minScore` thresholds need re-tuning; `--explain` now reports
+  `rerankRank` instead of the blend weight. On FiQA/SciFact/CQADup-Android this raised macro
+  nDCG@10 from 0.539 (blend) to 0.588 (end-to-end `qmd bench`, rerank on, no expansion).
 
 ### Internal
 
-- Add `finetune/benchmarks/public-eval/` for evaluating fine-tuned query-expansion
-  adapters. Prompts are read only from a sealed SFT release manifest, and the
-  manifest is validated against every stored training prompt. Truncation is
-  counted per sample using EOS. Raw outputs are hash-checked against their
-  manifest and the benchmark before `qmd bench` reads them.
-  `generateExpansionArtifact` now also passes each query's `qid` to `generateRaw`.
+- nf-freshstack public distillation: formal runs take their input count,
+  source quotas, sources, and winner metric order from the frozen pool
+  manifest; the sealed `public-distill-v2` release renders the V1 student
+  prompt and records its template and hash, so `train_sft_v1.py` can load it.
+  Run manifests record the retrieval settings the source profiles actually
+  used, and index verification shares `verify_frozen_indexes.ts`.
+
+- VH inference profiles no longer inherit node-llama-cpp's default system
+  prompt: `system_prompt` defaults to `""` to match the SFT training envelope,
+  the profile's sampling block is now honored by `bench:expand` (instead of
+  hard-coded T=0.7), `repeat_penalty_last_tokens: 0` disables penalties, and
+  `quantization` may be `Q8_0` or `F16`.
+  Resuming a partial VH artifact now also requires the same seed and profile
+  hash, and `generated_tokens` counts every sampled token including EOG.
+
+- `qmd bench` hashes untracked files for `qmd_diff_sha256` by streaming them
+  instead of reading every file into memory; the digest bytes are unchanged.
+
+- Share Python artifact I/O across distillation, SFT releases, and teacher
+  qualification; remove unused path/state scaffolding and use the release's
+  V2-A prompt in evaluation so its bytes and identity have one source.
+
+- Generalize the SciFact-only BEIR prep into a multi-dataset framework
+  (`finetune/benchmarks/lib/beir.ts` + `beir/scifact.ts` config), replacing
+  `prepare-scifact.ts` and `generate-expansions.ts` with a shared `expand.ts`
+  CLI.
 
 - Split the 4,548-line `src/cli/qmd.ts` into focused modules under `src/cli/`
   (`context`, `term`, `output`, `help`, and `commands/{docs,search,indexing,
