@@ -62,6 +62,7 @@ import {
   parseExpansionsJsonl,
 } from "./qrels.js";
 import { validateBenchmarkRunName } from "./run-name.js";
+import { VEC_TABLE } from "../vec-layout.js";
 import type {
   BenchmarkFixture,
   BenchmarkQuery,
@@ -317,9 +318,67 @@ function computeSummary(results: QueryResult[]): BenchmarkResult["summary"] {
   return summary;
 }
 
+export type BenchCollectionInfo = {
+  name: string;
+  active_count: number;
+};
+
+/**
+ * Fail fast when the fixture's collection is missing or empty so `qmd bench`
+ * does not spend minutes printing a wall of 0.00 (#716).
+ */
+export function assertBenchCollectionReady(
+  collections: BenchCollectionInfo[],
+  collection?: string,
+): void {
+  if (collection) {
+    const match = collections.find(c => c.name === collection);
+    if (!match) {
+      const names = collections.map(c => c.name);
+      const hint = names.length > 0
+        ? `Available: ${names.join(", ")}. Run 'qmd ls' to inspect.`
+        : "Run 'qmd ls' to see available collections.";
+      throw new Error(`Collection not found: ${collection}\n${hint}`);
+    }
+    if (match.active_count === 0) {
+      throw new Error(
+        `Collection '${collection}' has no indexed documents.\nRun 'qmd update', then 'qmd ls ${collection}' to confirm files are indexed before bench.`,
+      );
+    }
+    return;
+  }
+
+  const total = collections.reduce((n, c) => n + c.active_count, 0);
+  if (collections.length === 0 || total === 0) {
+    throw new Error(
+      "No indexed documents found.\nIndex a collection with 'qmd collection add' / 'qmd update' before running bench.",
+    );
+  }
+}
+
+export function benchSummaryAllZero(
+  summary: BenchmarkResult["summary"],
+): boolean {
+  const entries = Object.values(summary);
+  if (entries.length === 0) return false;
+  return entries.every(s => s.avg_precision === 0 && s.avg_recall === 0 && s.avg_mrr === 0);
+}
+
+export function allZeroBenchWarning(collection?: string): string {
+  const lsHint = collection ? `qmd ls ${collection}` : "qmd ls";
+  return `All benchmark scores were 0.00 — the collection is likely unindexed or the fixture's expected files are missing. Check with '${lsHint}'.`;
+}
+
 export async function runBenchmark(
   fixturePath: string,
-  options: { json?: boolean; collection?: string; backends?: string[]; dbPath?: string; configPath?: string } = {},
+  options: {
+    json?: boolean;
+    collection?: string;
+    backends?: string[];
+    dbPath?: string;
+    configPath?: string;
+    config?: import("../collections.js").CollectionConfig;
+  } = {},
 ): Promise<BenchmarkResult> {
   // Load fixture
   const raw = readFileSync(resolve(fixturePath), "utf-8");
@@ -333,6 +392,7 @@ export async function runBenchmark(
   const store = await createStore({
     dbPath: options.dbPath ?? getDefaultDbPath(),
     ...(options.configPath ? { configPath: options.configPath } : {}),
+    ...(options.config ? { config: options.config } : {}),
   });
 
   // Filter backends if requested
@@ -342,30 +402,39 @@ export async function runBenchmark(
 
   const collection = options.collection ?? fixture.collection;
 
-  // Run queries
   const results: QueryResult[] = [];
-  for (const query of fixture.queries) {
-    const backends: Record<string, BackendResult> = {};
-
-    for (const backend of activeBackends) {
-      if (!options.json) {
-        process.stderr.write(`  ${query.id} / ${backend.name}...`);
-      }
-      backends[backend.name] = await runQuery(store, backend, query, collection);
-      if (!options.json) {
-        process.stderr.write(` ${Math.round(backends[backend.name]!.latency_ms)}ms\n`);
-      }
+  try {
+    // Only require an indexed collection when there is something to retrieve;
+    // empty fixtures (dispatch/shape smoke tests) run without one.
+    if (fixture.queries.length > 0) {
+      const collections = await store.listCollections();
+      assertBenchCollectionReady(collections, collection);
     }
 
-    results.push({
-      id: query.id,
-      query: query.query,
-      type: query.type,
-      backends,
-    });
-  }
+    // Run queries
+    for (const query of fixture.queries) {
+      const backends: Record<string, BackendResult> = {};
 
-  await store.close();
+      for (const backend of activeBackends) {
+        if (!options.json) {
+          process.stderr.write(`  ${query.id} / ${backend.name}...`);
+        }
+        backends[backend.name] = await runQuery(store, backend, query, collection);
+        if (!options.json) {
+          process.stderr.write(` ${Math.round(backends[backend.name]!.latency_ms)}ms\n`);
+        }
+      }
+
+      results.push({
+        id: query.id,
+        query: query.query,
+        type: query.type,
+        backends,
+      });
+    }
+  } finally {
+    await store.close();
+  }
 
   const summary = computeSummary(results);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
@@ -378,6 +447,10 @@ export async function runBenchmark(
   };
 
   // Output
+  if (benchSummaryAllZero(summary)) {
+    process.stderr.write(`\n${allZeroBenchWarning(collection)}\n`);
+  }
+
   if (options.json) {
     console.log(JSON.stringify(benchResult, null, 2));
   } else {
@@ -745,7 +818,7 @@ export function inspectBenchmarkIndex(
   const fingerprint = createHash("sha256");
   const fingerprints = new Set<string>();
   const hasVectorTable = !!store.db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vectors_vec'",
+    `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${VEC_TABLE}'`,
   ).get();
   let vectorDocumentCount = 0;
   let vectorChunkCount = 0;
@@ -780,7 +853,7 @@ export function inspectBenchmarkIndex(
       const hashSeq = `${row.hash}_${chunk.seq}`;
       const vector = hasVectorTable
         ? store.db.prepare(
-          "SELECT embedding FROM vectors_vec WHERE hash_seq = ?",
+          `SELECT embedding FROM ${VEC_TABLE} WHERE hash_seq = ?`,
         ).get(hashSeq) as { embedding: unknown } | undefined
         : undefined;
       if (!vector) complete = false;

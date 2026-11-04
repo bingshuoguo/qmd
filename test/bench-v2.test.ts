@@ -63,7 +63,7 @@ function controlledStore(): {
   const directory = mkdtempSync(join(tmpdir(), "qmd-bench-v2-"));
   temporaryDirectories.push(directory);
   const store = createStore(join(directory, "index.sqlite"));
-  store.db.exec("CREATE TABLE vectors_vec (hash_seq TEXT PRIMARY KEY, embedding BLOB)");
+  store.db.exec("CREATE TABLE vectors_by_collection (hash_seq TEXT PRIMARY KEY, embedding BLOB)");
 
   const fts = vi.fn((query: string, limit?: number, collection?: string) => {
     const name = query === "original" ? "original-fts" : `lex-${query}`;
@@ -201,7 +201,7 @@ describe("controlled benchmark retrieval seam", () => {
     try {
       await hybridQuery(store, "production", { skipRerank: true });
       expect(expand).toHaveBeenCalledTimes(1);
-      expect(expand).toHaveBeenCalledWith("production", undefined, undefined);
+      expect(expand.mock.calls[0]?.[0]).toBe("production");
     } finally {
       store.close();
     }
@@ -415,7 +415,7 @@ describe("v2 runner artifacts", () => {
           (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at)
         VALUES (?, 0, 0, ?, ?, 1, ?)
       `).run(hashValue, "test-embedding", "fingerprint", now);
-      store.db.prepare("INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)")
+      store.db.prepare("INSERT INTO vectors_by_collection (hash_seq, embedding) VALUES (?, ?)")
         .run(`${hashValue}_0`, Buffer.from([byte, 0, 0, 0]));
     }
     try {
@@ -448,7 +448,7 @@ describe("v2 runner artifacts", () => {
         .update(vectorRecord("d2", Buffer.from([2, 0, 0, 0])))
         .digest("hex");
       expect(first.index_fingerprint).toBe(expectedFingerprint);
-      store.db.prepare("UPDATE vectors_vec SET embedding = ? WHERE hash_seq = ?")
+      store.db.prepare("UPDATE vectors_by_collection SET embedding = ? WHERE hash_seq = ?")
         .run(Buffer.from([9, 0, 0, 0]), "hash-2_0");
       const second = inspectBenchmarkIndex(store, root, benchmark, profile);
       expect(second.index_fingerprint).not.toBe(first.index_fingerprint);

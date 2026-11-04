@@ -29,9 +29,7 @@ import {
   getDocumentContent,
   countDocumentsInCollection,
   listDocumentsWithMeta,
-  hasVectorTable,
   sampleEmbeddedChunks,
-  getStoredEmbedding,
   getSqliteVersion,
   getVecVersion,
   getEmbeddingFingerprintGroups,
@@ -220,14 +218,6 @@ describe("listDocumentsWithMeta", () => {
   });
 });
 
-describe("hasVectorTable", () => {
-  test("false before vectors_vec exists, true after ensureVecTable", () => {
-    expect(hasVectorTable(db)).toBe(false);
-    store.ensureVecTable(3);
-    expect(hasVectorTable(db)).toBe(true);
-  });
-});
-
 describe("sampleEmbeddedChunks", () => {
   test("samples embedded chunks for a model+fingerprint, joined to active doc", async () => {
     const hash = await seedDoc("c1", "a.md", { body: "hello world body" });
@@ -243,17 +233,6 @@ describe("sampleEmbeddedChunks", () => {
 
     // A different fingerprint matches nothing.
     expect(sampleEmbeddedChunks(db, "m1", "other", 5)).toHaveLength(0);
-  });
-});
-
-describe("getStoredEmbedding", () => {
-  test("returns stored embedding bytes for hash_seq, null when missing", async () => {
-    const hash = await seedDoc("c1", "a.md");
-    store.ensureVecTable(3);
-    insertEmbedding(db, hash, 0, 0, new Float32Array([1, 2, 3]), "m", new Date().toISOString(), 1);
-    const emb = getStoredEmbedding(db, `${hash}_0`);
-    expect(emb).toBeInstanceOf(Uint8Array);
-    expect(getStoredEmbedding(db, "nope_0")).toBeNull();
   });
 });
 

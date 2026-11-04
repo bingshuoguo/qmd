@@ -1,6 +1,6 @@
 {
   "name": "@tobilu/qmd",
-  "version": "2.6.3",
+  "version": "2.8.3",
   "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
   "type": "module",
   "main": "dist/index.js",
@@ -26,8 +26,9 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "prepare": "[ -d .git ] && ./scripts/install-hooks.sh || true",
+    "prepare": "node scripts/install-hooks.mjs && node scripts/build.mjs",
     "build": "node scripts/build.mjs",
+    "lint": "oxlint",
     "test": "node scripts/test-all.mjs",
     "test:types": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
     "test:node": "node ./node_modules/vitest/vitest.mjs run --reporter=verbose --testTimeout 60000",
@@ -35,12 +36,6 @@
     "test:unit": "CI=true node ./node_modules/vitest/vitest.mjs run --reporter=verbose --testTimeout 60000 test/ && CI=true bun test --timeout 60000 --preload ./src/test-preload.ts test/",
     "test:package": "node scripts/package-smoke.mjs",
     "qmd": "tsx src/cli/qmd.ts",
-    "bench:expand": "tsx finetune/benchmarks/expand.ts",
-    "public-distill:prepare": "node --import tsx finetune/benchmarks/public-distill/prepare.ts",
-    "public-distill:prepare-main-pool": "node --import tsx finetune/benchmarks/public-distill/prepare-main-pool.ts",
-    "public-distill:prepare-smoke-index": "node --import tsx finetune/benchmarks/public-distill/prepare-smoke-index.ts",
-    "public-distill:generate": "node --env-file=.env.distill.deepseek-json4-v2.local --import tsx finetune/benchmarks/public-distill/generate.ts",
-    "public-distill:score": "node --import tsx finetune/benchmarks/public-distill/score.ts",
     "index": "tsx src/cli/qmd.ts index",
     "vector": "tsx src/cli/qmd.ts vector",
     "search": "tsx src/cli/qmd.ts search",
@@ -48,7 +43,13 @@
     "rerank": "tsx src/cli/qmd.ts rerank",
     "inspector": "npx @modelcontextprotocol/inspector tsx src/cli/qmd.ts mcp",
     "release": "./scripts/release.sh",
-    "smoke:package-grammars": "node scripts/check-package-grammars.mjs"
+    "smoke:package-grammars": "node scripts/check-package-grammars.mjs",
+    "bench:expand": "tsx finetune/benchmarks/expand.ts",
+    "public-distill:prepare": "node --import tsx finetune/benchmarks/public-distill/prepare.ts",
+    "public-distill:prepare-main-pool": "node --import tsx finetune/benchmarks/public-distill/prepare-main-pool.ts",
+    "public-distill:prepare-smoke-index": "node --import tsx finetune/benchmarks/public-distill/prepare-smoke-index.ts",
+    "public-distill:generate": "node --env-file=.env.distill.deepseek-json4-v2.local --import tsx finetune/benchmarks/public-distill/generate.ts",
+    "public-distill:score": "node --import tsx finetune/benchmarks/public-distill/score.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -62,8 +63,8 @@
     "url": "https://github.com/tobi/qmd/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "better-sqlite3": "12.10.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "better-sqlite3": "^13.0.3",
     "fast-glob": "3.3.3",
     "node-llama-cpp": "3.20.0",
     "picomatch": "4.0.5",
@@ -84,7 +85,10 @@
     "sqlite-vec-windows-x64": "0.1.9"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.78.0",
     "@types/better-sqlite3": "7.6.13",
+    "@types/bun": "1.4.3",
+    "oxlint": "1.78.0",
     "tsx": "4.23.12",
     "vitest": "3.2.7"
   },
@@ -94,7 +98,6 @@
       "esbuild",
       "node-llama-cpp",
       "tree-sitter-go",
-      "tree-sitter-javascript",
       "tree-sitter-python",
       "tree-sitter-rust",
       "tree-sitter-typescript"

@@ -15,6 +15,7 @@ artifacts/
 *.md
 !README.md
 !CLAUDE.md
+!DESIGN.md
 !CHANGELOG.md
 !skills/**/*.md
 !finetune/*.md

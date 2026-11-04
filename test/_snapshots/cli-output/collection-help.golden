@@ -5,15 +5,26 @@ Usage: qmd collection <command> [options]
 
 Commands:
   list                      List all collections
-  add <path> [--name NAME]  Add a collection
+  add <path> [--name NAME] [--mask|--glob GLOB]  Add a collection
   remove <name>             Remove a collection
   rename <old> <new>        Rename a collection
   show <name>               Show collection details
+  metadata [name...]        Discover metadata keys, types, and value counts
+    --match <json>          Report only metadata entries matching this condition
+                            (same AST as --filter; 'field' is the entry's key or value)
+    --filter <json>         Count only documents matching a metadata filter
+    --key-limit <n>         Keys reported (default 50), --key-offset <n> pages, --all-keys removes the window
+    --value-limit <n>       Values per key (default 10), --value-offset <n> pages, --all-values removes the window
+    --sort count|value      Value order (default count), --min-count <n> drops the tail
   update-cmd <name> [cmd]   Set pre-update command (e.g., 'git pull')
   include <name>            Include in default queries
   exclude <name>            Exclude from default queries
 
 Examples:
   qmd collection add ~/notes --name notes
+  qmd collection add ~/notes --name notes --mask 'a.md,journals/*.md'
   qmd collection update-cmd brain 'git pull'
   qmd collection exclude archive
+  qmd collection metadata notes --match '{"field":"key","operator":"eq","value":"topics"}'
+  qmd collection metadata notes --match '{"field":"value","operator":"eq","value":"docs-team"}'
+  qmd collection metadata notes --match '{"field":"key","operator":"eq","value":"topics"}' --filter '{"field":"status","operator":"eq","value":"published"}'
