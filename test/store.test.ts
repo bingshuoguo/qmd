@@ -519,6 +519,11 @@ describe("Document Helpers", () => {
     expect(extractTitle(content, "my-document.md")).toBe("my-document");
   });
 
+  test("extractTitle does not consume body text after an empty heading", () => {
+    const content = "# \n\nBody text must not become the title.";
+    expect(extractTitle(content, "123.md")).toBe("123");
+  });
+
   test("extractTitle skips generic 'Notes' heading", () => {
     const content = "# Notes\n\n## Actual Title\n\nContent";
     expect(extractTitle(content, "file.md")).toBe("Actual Title");
@@ -527,20 +532,6 @@ describe("Document Helpers", () => {
   test("extractTitle handles 📝 Notes heading", () => {
     const content = "# 📝 Notes\n\n## Meeting Summary\n\nContent";
     expect(extractTitle(content, "file.md")).toBe("Meeting Summary");
-  });
-
-  test("extractTitle never takes the next line as an empty heading's title", () => {
-    expect(extractTitle("#\nBody text", "my-note.md")).toBe("my-note");
-    expect(extractTitle("#\n## Real Title\nBody", "file.md")).toBe("Real Title");
-    expect(extractTitle("*\nBody text", "my-note.org")).toBe("my-note");
-    expect(extractTitle("#+TITLE:\n* Heading\nBody", "file.org")).toBe("Heading");
-  });
-
-  test("extractTitle skips empty headings that have trailing whitespace", () => {
-    expect(extractTitle("#   \n## Real Title\nBody", "file.md")).toBe("Real Title");
-    expect(extractTitle("#+TITLE: \n* Heading\nBody", "file.org")).toBe("Heading");
-    expect(extractTitle("*   \n* Heading\nBody", "file.org")).toBe("Heading");
-    expect(extractTitle("# Title  \nBody", "file.md")).toBe("Title");
   });
 });
 

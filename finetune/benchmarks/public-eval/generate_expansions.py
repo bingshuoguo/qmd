@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Deterministic greedy expansion generation from a sealed SFT release.
+"""Deterministic greedy expansion generation for the frozen evaluation (spec section 16).
 
-Emits raw model output only. materialize-expansions.ts validates the raw file
-and parses it through the same parser every other benchmark run uses.
+Emits raw model output only.  Parsing into the canonical expansion artifact is
+done by materialize-expansions.ts so that base and SFT go through exactly the
+same parser the rest of the benchmark pipeline uses.
 
-The prompt always comes from --release-manifest: the exact template the
-adapter was trained on, re-checked against every stored training prompt.
-Base and SFT arms therefore differ only in whether --adapter is loaded.
+The base and SFT arms differ in one thing: whether an adapter is loaded.  Prompt,
+chat template, tokenizer, generation parameters and seed are shared by
+construction -- the prompt comes from the same module the training data was
+materialized with.
 
-Usage (from the repository root, in an environment from requirements-eval.txt):
-    python finetune/benchmarks/public-eval/generate_expansions.py \
-        --release-manifest <release>/experiments/<id>/release-manifest.json \
+Usage:
+    uv run python -m benchmarks.public_eval.generate_expansions \
         --benchmark <benchmark-dir> --variant base --model <snapshot>
     ... --variant sft --model <snapshot> --adapter <run>/final-adapter
 """
@@ -18,22 +19,72 @@ Usage (from the repository root, in an environment from requirements-eval.txt):
 from __future__ import annotations
 
 import argparse
-import importlib.metadata
+import hashlib
 import json
-import platform
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-FINETUNE_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(FINETUNE_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from dataset.artifact_io import atomic_json, atomic_jsonl, sha256_file  # noqa: E402
-from dataset.sft_release import (  # noqa: E402
-    Release, assert_prompt_template, expected_prompt, load_release,
+from dataset.artifact_io import atomic_json, atomic_jsonl, sha256_file
+from dataset.public_distill_v1 import (
+    PROMPT_VERSION as V1_PROMPT_VERSION,
+    TOKENIZER_REVISION,
+    expected_prompt as v1_expected_prompt,
+    prompt_sha256 as v1_prompt_sha256,
+)
+from dataset.v2a_pareto_release import (
+    PROMPT_VERSION as V2A_PROMPT_VERSION,
+    V2A_PROMPT_TEMPLATE,
 )
 
+# === Prompt registry ====================================================
+
+V2_VH_USER_TEMPLATE = (
+    "/no_think You generate retrieval expansions for a search query.\n"
+    "Return only newline-separated lines in exactly this format:\n"
+    "hyde: <one hypothetical document passage>\n"
+    "vec: <semantic search query>\n"
+    "vec: <optional second complementary semantic search query>\n"
+    "Query: {query}"
+)
+
+PROMPT_REGISTRY = {
+    "v1": {
+        "version": V1_PROMPT_VERSION,
+        "sha256": v1_prompt_sha256(),
+    },
+    "v2-vh": {
+        "version": "qmd-student-expansion-v2-vh-v1",
+        "template": V2_VH_USER_TEMPLATE,
+        "sha256": hashlib.sha256(V2_VH_USER_TEMPLATE.encode("utf-8")).hexdigest(),
+    },
+    "v2a-pareto": {
+        "version": V2A_PROMPT_VERSION,
+        "template": V2A_PROMPT_TEMPLATE,
+        "sha256": hashlib.sha256(V2A_PROMPT_TEMPLATE.encode("utf-8")).hexdigest(),
+    },
+}
+
+
+def expected_prompt(query: str, prompt_version: str = "v1") -> str:
+    """Render the Qwen chat envelope for a given prompt version."""
+    if prompt_version == "v1":
+        return v1_expected_prompt(query)
+    template = PROMPT_REGISTRY[prompt_version]["template"]
+    user_content = template.replace("{query}", query)
+    return f"<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
+
+
+def prompt_sha256(prompt_version: str = "v1") -> str:
+    return PROMPT_REGISTRY[prompt_version]["sha256"]
+
+
+def prompt_version_string(prompt_version: str = "v1") -> str:
+    return PROMPT_REGISTRY[prompt_version]["version"]
+
+# Spec section 16.  Frozen for both arms.
 GENERATION = {
     "do_sample": False,
     "num_beams": 1,
@@ -45,31 +96,6 @@ GENERATION = {
 }
 
 
-def load_evaluation_release(path: Path) -> Release:
-    release = load_release(path)
-    assert_prompt_template(release.train.records, release.prompt_template)
-    assert_prompt_template(release.validation.records, release.prompt_template)
-    return release
-
-
-def source_state() -> dict[str, Any]:
-    def git(*args: str) -> str:
-        return subprocess.run(
-            ["git", *args], cwd=FINETUNE_ROOT, check=True, capture_output=True, text=True,
-        ).stdout.strip()
-    return {"qmd_commit": git("rev-parse", "HEAD"), "qmd_dirty": bool(git("status", "--porcelain"))}
-
-
-def runtime_environment() -> dict[str, Any]:
-    packages = {}
-    for name in ("torch", "transformers", "peft", "accelerate", "numpy"):
-        try:
-            packages[name] = importlib.metadata.version(name)
-        except importlib.metadata.PackageNotFoundError:
-            packages[name] = None
-    return {"python": platform.python_version(), "executable": sys.executable, "packages": packages}
-
-
 def load_queries(benchmark_dir: Path) -> list[dict[str, str]]:
     queries = []
     for line in (benchmark_dir / "queries.jsonl").read_text(encoding="utf-8").splitlines():
@@ -79,8 +105,6 @@ def load_queries(benchmark_dir: Path) -> list[dict[str, str]]:
         queries.append({"qid": record["qid"], "query": record["query"]})
     if not queries:
         raise ValueError(f"{benchmark_dir}: queries.jsonl is empty")
-    if len({query["qid"] for query in queries}) != len(queries):
-        raise ValueError(f"{benchmark_dir}: queries.jsonl has duplicate qids")
     return queries
 
 
@@ -90,7 +114,8 @@ def load_model(model_path: str, revision: str | None, adapter: Path | None) -> t
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, revision=revision)
-    # Batched generation must pad on the left or continuations start at the wrong offset.
+    # Section 16: batched generation must pad on the left or the decoded
+    # continuations start at the wrong offset.
     tokenizer.padding_side = "left"
 
     device = torch.device(
@@ -98,7 +123,9 @@ def load_model(model_path: str, revision: str | None, adapter: Path | None) -> t
         else "mps" if torch.backends.mps.is_available()
         else "cpu"
     )
-    model = AutoModelForCausalLM.from_pretrained(model_path, revision=revision, dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, revision=revision, dtype=torch.bfloat16
+    )
     if adapter is not None:
         from peft import PeftModel
 
@@ -109,7 +136,8 @@ def load_model(model_path: str, revision: str | None, adapter: Path | None) -> t
 
 
 def generate(
-    model: Any, tokenizer: Any, queries: list[dict[str, str]], batch_size: int, prompt_template: str,
+    model: Any, tokenizer: Any, queries: list[dict[str, str]], batch_size: int,
+    prompt_version: str = "v1",
 ) -> list[dict[str, Any]]:
     import torch
 
@@ -121,7 +149,7 @@ def generate(
     records: list[dict[str, Any]] = []
     for start in range(0, len(queries), batch_size):
         batch = queries[start : start + batch_size]
-        prompts = [expected_prompt(prompt_template, item["query"]) for item in batch]
+        prompts = [expected_prompt(item["query"], prompt_version) for item in batch]
         inputs = tokenizer(
             prompts, return_tensors="pt", padding=True, add_special_tokens=False
         ).to(model.device)
@@ -145,7 +173,7 @@ def generate(
                 None,
             )
             if eos_index is not None:
-                # Count the terminal EOS, never the batch padding after it.
+                # Count the terminal EOS, but never the batch padding after it.
                 # EOS at max_new_tokens is a normal stop, not a truncation.
                 generated = generated[:eos_index + 1]
                 finish_reason = "eos"
@@ -165,71 +193,74 @@ def generate(
                     if finish_reason == "unknown" else None
                 ),
             })
-        print(f"  {min(start + batch_size, len(queries))}/{len(queries)}", file=sys.stderr, flush=True)
+        print(
+            f"  {min(start + batch_size, len(queries))}/{len(queries)}",
+            file=sys.stderr,
+            flush=True,
+        )
     return records
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--release-manifest", type=Path, required=True,
-                        help="Sealed SFT release whose exact training prompt is used")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark", type=Path, required=True)
     parser.add_argument("--variant", required=True, help="Arm name, e.g. base or sft")
     parser.add_argument("--model", required=True, help="Base model id or local snapshot")
-    parser.add_argument("--revision", default=None)
+    parser.add_argument("--revision", default=TOKENIZER_REVISION)
     parser.add_argument("--adapter", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--prompt-version", default="v1",
+                        choices=["v1", "v2-vh", "v2a-pareto"])
     args = parser.parse_args()
 
-    if args.batch_size <= 0:
-        parser.error("--batch-size must be positive")
-    if not args.variant or Path(args.variant).name != args.variant or args.variant in (".", ".."):
-        parser.error("--variant must be a filename component")
-
-    release = load_evaluation_release(args.release_manifest)
     benchmark_dir = args.benchmark.resolve()
     output_dir = benchmark_dir / "raw-generations"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{args.variant}.jsonl"
     manifest_path = output_dir / f"{args.variant}-manifest.json"
-    if output_path.exists() or manifest_path.exists():
+    if output_path.exists():
         raise ValueError(f"raw generation already exists, refusing to overwrite: {output_path}")
 
     from transformers import set_seed
 
     set_seed(GENERATION["seed"])
+
     queries = load_queries(benchmark_dir)
     print(f"{args.variant}: {len(queries)} queries from {benchmark_dir.name}", file=sys.stderr)
 
     model, tokenizer = load_model(args.model, args.revision, args.adapter)
-    records = generate(model, tokenizer, queries, args.batch_size, release.prompt_template)
-    atomic_jsonl(output_path, records)
+    records = generate(model, tokenizer, queries, args.batch_size, args.prompt_version)
 
-    adapter_weights = args.adapter / "adapter_model.safetensors" if args.adapter else None
+    atomic_jsonl(output_path, records)
     atomic_json(manifest_path, {
-        "schema_version": "qmd-eval-raw-generation-v2",
+        "schema_version": "qmd-eval-raw-generation-v1",
         "benchmark_id": benchmark_dir.name,
         "variant": args.variant,
         "model": args.model,
         "revision": args.revision,
         "adapter": str(args.adapter) if args.adapter else None,
-        "adapter_sha256": sha256_file(adapter_weights) if adapter_weights and adapter_weights.is_file() else None,
-        "release": release.provenance(),
-        **source_state(),
-        "environment": runtime_environment(),
+        "adapter_sha256": (
+            sha256_file(args.adapter / "adapter_model.safetensors")
+            if args.adapter and (args.adapter / "adapter_model.safetensors").is_file()
+            else None
+        ),
+        "prompt_version": prompt_version_string(args.prompt_version),
+        "prompt_sha256": prompt_sha256(args.prompt_version),
         "generation": GENERATION,
         "generation_statistics_version": "eos-aware-v1",
         "generated_tokens_semantics": "includes terminal EOS; excludes post-EOS padding",
         "eos_token_id": tokenizer.eos_token_id,
         "batch_size": args.batch_size,
-        "queries_sha256": sha256_file(benchmark_dir / "queries.jsonl"),
-        "rows": len(records),
+        "queries": len(queries),
         "truncated": sum(record["truncated"] for record in records),
         "raw_sha256": sha256_file(output_path),
     })
 
-    print(f"Wrote {len(records)} generations to {output_path} "
-          f"({sum(r['truncated'] for r in records)} hit the token budget)", file=sys.stderr)
+    truncated = sum(record["truncated"] for record in records)
+    print(
+        f"Wrote {len(records)} generations to {output_path} ({truncated} hit the token budget)",
+        file=sys.stderr,
+    )
     return 0
 
 

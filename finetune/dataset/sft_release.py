@@ -1,25 +1,34 @@
-"""Manifest-gated loading of a sealed SFT release.
+#!/usr/bin/env python3
+"""Manifest-gated loading of a sealed SFT release (spec section 2.4).
 
-A release is only ever addressed through its manifest. Pointing at a bare JSONL
-is not supported: that is the path that silently re-splits a sealed train file
-and produces a leaked validation set.
+The trainer's only entry point is a release manifest.  Pointing at a bare JSONL
+is not supported: that is exactly the path that silently re-splits a sealed
+train file and produces a leaked validation set.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from dataset.artifact_io import read_jsonl, sha256_file
+from dataset.public_distill_v1 import (
+    EOS_TOKEN_ID,
+    EXPERIMENT_ID,
+    MAX_LENGTH,
+    PAD_TOKEN_ID,
+    RELEASE_ID,
+    expected_prompt,
+)
 
 TRAIN_ARTIFACT = "sft-train.jsonl"
 VALIDATION_ARTIFACT = "sft-validation.jsonl"
 
-# Supervision fields; everything else in a record is provenance.
+# The trainer consumes exactly these two fields; everything else is provenance
+# that must survive in the file but must never reach the tokenizer.
 SUPERVISION_FIELDS = ("prompt", "completion")
 
 
@@ -44,6 +53,7 @@ class Release:
     validation: ReleaseSplit
 
     def provenance(self) -> dict[str, Any]:
+        """The subset of release facts that must land in the run manifest."""
         return {
             "release_id": self.release_id,
             "experiment_id": self.experiment_id,
@@ -68,9 +78,7 @@ def _load_split(
     if not isinstance(entry, dict):
         raise ValueError(f"release manifest does not declare {artifact}")
 
-    path = Path(os.path.normpath(release_root / entry["path"]))
-    if not path.is_relative_to(release_root):
-        raise ValueError(f"{artifact}: path escapes the release root: {entry['path']}")
+    path = release_root / entry["path"]
     if not path.is_file():
         raise ValueError(f"declared artifact is missing: {path}")
 
@@ -106,20 +114,27 @@ def _load_split(
     return ReleaseSplit(name=expected_split, path=path, sha256=digest, records=records)
 
 
-def load_release(manifest_path: Path) -> Release:
+def load_release(
+    manifest_path: Path,
+    expected_release_id: str = RELEASE_ID,
+    expected_experiment_id: str = EXPERIMENT_ID,
+) -> Release:
     """Load and fully validate a sealed release; raise on any inconsistency."""
-    # abspath, not resolve(): an archived experiment directory may be a symlink,
-    # and core_artifacts paths are relative to the release root as addressed.
-    manifest_path = Path(os.path.abspath(manifest_path))
+    manifest_path = manifest_path.resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     if manifest.get("status") != "sealed":
         raise ValueError(f"release is not sealed: {manifest.get('status')!r}")
     if manifest.get("final_sft_eligible") is not True:
         raise ValueError("release is not final_sft_eligible")
-    for key in ("release_id", "experiment_id"):
-        if not isinstance(manifest.get(key), str) or not manifest[key]:
-            raise ValueError(f"release manifest {key} must be a non-empty string")
+    if manifest.get("release_id") != expected_release_id:
+        raise ValueError(
+            f"release_id {manifest.get('release_id')!r} != {expected_release_id!r}"
+        )
+    if manifest.get("experiment_id") != expected_experiment_id:
+        raise ValueError(
+            f"experiment_id {manifest.get('experiment_id')!r} != {expected_experiment_id!r}"
+        )
 
     # core_artifacts paths are relative to the release root, two levels above
     # experiments/<experiment_id>/.
@@ -168,6 +183,23 @@ def load_release(manifest_path: Path) -> Release:
     )
 
 
+def assert_token_identities(tokenizer: Any) -> None:
+    """Spec section 5.2 invariant 11: pad and eos must exist and differ."""
+    if tokenizer.pad_token_id != PAD_TOKEN_ID:
+        raise ValueError(
+            f"pad_token_id {tokenizer.pad_token_id} != frozen {PAD_TOKEN_ID}"
+        )
+    if tokenizer.eos_token_id != EOS_TOKEN_ID:
+        raise ValueError(
+            f"eos_token_id {tokenizer.eos_token_id} != frozen {EOS_TOKEN_ID}"
+        )
+    if tokenizer.pad_token_id == tokenizer.eos_token_id:
+        raise ValueError(
+            "pad_token_id must differ from eos_token_id so that a masking bug "
+            "cannot hide inside padding"
+        )
+
+
 def expected_prompt(prompt_template: str, query: str) -> str:
     """Render the sealed user template into the pinned Qwen chat envelope."""
     return (
@@ -185,3 +217,40 @@ def assert_prompt_template(records: list[dict[str, Any]], prompt_template: str) 
             raise ValueError(
                 f"{record['input_id']}: stored prompt does not match the sealed release template"
             )
+
+
+def preflight_lengths(
+    records: list[dict[str, Any]], tokenizer: Any, max_length: int = MAX_LENGTH
+) -> dict[str, int]:
+    """Tokenize every record before the model is loaded; reject over-length.
+
+    Returns aggregate token counts for the run manifest.
+    """
+    input_tokens = 0
+    supervised_tokens = 0
+    longest = 0
+    for record in records:
+        prompt_ids = tokenizer(record["prompt"], add_special_tokens=False)["input_ids"]
+        input_ids = tokenizer(
+            record["prompt"] + record["completion"], add_special_tokens=False
+        )["input_ids"]
+        if input_ids[: len(prompt_ids)] != prompt_ids:
+            raise ValueError(
+                f"{record['input_id']}: prompt tokenization is not a prefix of the full sequence"
+            )
+        if len(input_ids) <= len(prompt_ids):
+            raise ValueError(f"{record['input_id']}: completion has no token")
+        if len(input_ids) > max_length:
+            raise ValueError(
+                f"{record['input_id']}: {len(input_ids)} tokens exceed max_length={max_length}; "
+                "refusing to truncate completion-only supervision"
+            )
+        input_tokens += len(input_ids)
+        supervised_tokens += len(input_ids) - len(prompt_ids)
+        longest = max(longest, len(input_ids))
+    return {
+        "records": len(records),
+        "input_tokens": input_tokens,
+        "supervised_tokens": supervised_tokens,
+        "longest_sequence": longest,
+    }

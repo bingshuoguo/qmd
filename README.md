@@ -456,10 +456,9 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
                                       │
                                       ▼
                           ┌───────────────────────┐
-                          │  Position-Aware Blend │
-                          │  Top 1-3:  75% RRF    │
-                          │  Top 4-10: 60% RRF    │
-                          │  Top 11+:  40% RRF    │
+                          │   Rank Fusion         │
+                          │ 1/(60+rrf rank) +     │
+                          │ 1/(60+rerank rank)    │
                           └───────────────────────┘
 ```
 
@@ -475,7 +474,7 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
 
 ### Fusion Strategy
 
-The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware blending:
+The `query` command uses **Reciprocal Rank Fusion (RRF)** for retrieval and rank fusion with the reranker:
 
 1. **Query Expansion**: Original query (×2 for weighting) + 1 LLM variation
 2. **Parallel Retrieval**: Each query searches both FTS and vector indexes
@@ -483,12 +482,10 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
 4. **Top-Rank Bonus**: Documents ranking #1 in any list get +0.05, #2-3 get +0.02
 5. **Top-K Selection**: Take top 30 candidates for reranking
 6. **Re-ranking**: LLM scores each document (yes/no with logprobs confidence)
-7. **Position-Aware Blending**:
-   - RRF rank 1-3: 75% retrieval, 25% reranker (preserves exact matches)
-   - RRF rank 4-10: 60% retrieval, 40% reranker
-   - RRF rank 11+: 40% retrieval, 60% reranker (trust reranker more)
+7. **Rank Fusion**: `score = 1/(60+rrf_rank) + 1/(60+rerank_rank)`, normalized so that
+   ranking first in both orders gives 1.0
 
-**Why this approach**: Pure RRF can dilute exact matches when expanded queries don't match. The top-rank bonus preserves documents that score #1 for the original query. Position-aware blending prevents the reranker from destroying high-confidence retrieval results.
+**Why this approach**: Pure RRF can dilute exact matches when expanded queries don't match. The top-rank bonus preserves documents that score #1 for the original query. Fusing ranks rather than raw scores keeps the result monotonic in both the retrieval and reranker orders and independent of how the reranker's scores are calibrated.
 
 ### Score Interpretation
 
@@ -498,6 +495,10 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
 | 0.5 - 0.8 | Moderately relevant |
 | 0.2 - 0.5 | Somewhat relevant |
 | 0.0 - 0.2 | Low relevance |
+
+Reranked `query` results use the normalized rank-fusion score instead: 1.0 means ranked
+first by both retrieval and the reranker, and the last of 40 candidates scores about 0.61.
+It reflects rank agreement, not absolute relevance.
 
 ## Requirements
 
@@ -1068,8 +1069,7 @@ qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --check-index
 qmd bench finetune/benchmarks/qmd-expansion-scifact-v1 --run raw
 
 # Generate one frozen expansion artifact per model. Generation is sequential
-# and resumes from a validated .partial file after interruption, but only with
-# the same --model and an unchanged queries.jsonl; otherwise rerun with --force.
+# and resumes from a validated .partial file after interruption.
 npm run bench:expand -- \
   --benchmark finetune/benchmarks/qmd-expansion-scifact-v1 \
   --run upstream-qmd \
@@ -1227,10 +1227,8 @@ Query ──► LLM Expansion ──► [Original, Variant 1, Variant 2]
          (yes/no + logprob confidence)
                 │
                 ▼
-         Position-Aware Blend
-         Rank 1-3:  75% RRF / 25% reranker
-         Rank 4-10: 60% RRF / 40% reranker
-         Rank 11+:  40% RRF / 60% reranker
+         Rank Fusion
+         1/(60 + RRF rank) + 1/(60 + rerank rank)
                 │
                 ▼
          Final Results

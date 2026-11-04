@@ -150,6 +150,42 @@ export interface BenchmarkExpansionRecord {
   error: string | null;
 }
 
+/**
+ * Expansion artifact schema versions.
+ *
+ * - "qmd-expansion-v1" (implicit on legacy artifacts): non-ok records must
+ *   have empty output and `fallback_used=false` — old fallback semantics
+ *   where a failed generation is recorded but never consumed.
+ * - "qmd-expansion-vh-serving-v1": adds the `generation` meta block and
+ *   allows `fallback_used=true` on non-ok records — the V2-VH serving
+ *   fallback policy (generation/format failure → empty expansions → raw
+ *   query retrieval path, error preserved).
+ */
+export type ExpansionSchemaVersion =
+  | "qmd-expansion-v1"
+  | "qmd-expansion-vh-serving-v1";
+
+export interface ExpansionGenerationMeta {
+  /** Explicit seed passed to the engine for this generation. */
+  seed: number;
+  /** Real stop reason from the engine ("eogToken" | "maxTokens" | "abort" | ...). */
+  stop_reason: string;
+  /** Tokens actually produced by the engine (includes the EOG token when it stopped on one). */
+  generated_tokens: number;
+  /** Wall-clock generation time in milliseconds. */
+  elapsed_ms: number;
+  /** SHA-256 of the full prompt template used for this generation. */
+  prompt_sha256: string;
+  /** SHA-256 of the generate-model GGUF artifact. */
+  model_sha256: string;
+  /** File SHA-256 of the inference profile JSON; null when none drove generation. */
+  profile_sha256: string | null;
+}
+
+export interface BenchmarkExpansionRecordVh extends BenchmarkExpansionRecord {
+  generation: ExpansionGenerationMeta;
+}
+
 export interface RetrievalProfileV2 {
   profile_id: string;
   collection_name: string;

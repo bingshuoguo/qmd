@@ -1,0 +1,43 @@
+schema_version: qmd-teacher-qualification-config-v1
+
+release_manifest: finetune/data/public-distill-v2-vh-prompt-v1/experiments/public-main-v2-vh-prompt-v1/release-manifest.json
+output_root: finetune/data/opd-v1/teacher-qualification
+
+models:
+  merged_v2:
+    model_id: Qwen/Qwen3-1.7B
+    revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+    adapter: artifacts/sft-runs/02-public-main-v2-vh-prompt-v1/training/public-main-v2-vh-prompt-v1/final-adapter
+    adapter_sha256: d6eff80e87f43a33f9fe5ebb7dd6e0f9acb83d5d62b67254dc519ae154234942
+  teacher:
+    model_id: Qwen/Qwen3-8B
+    revision_env: QMD_TEACHER_REVISION
+
+generation:
+  max_prompt_tokens: 512
+  max_new_tokens: 256
+  max_model_len: 1024
+  do_sample: false
+  num_beams: 1
+  responses_per_query: 1
+  dtype: bfloat16
+  quantization: null
+  seed: 42
+
+retrieval:
+  embedding_model: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+  rerank: false
+  result_limit: 30
+  per_list_limit: 30
+  candidate_limit: 40
+
+statistics:
+  bootstrap_resamples: 20000
+  seed: 42
+  source_floor: -0.01
+
+sources:
+  nfcorpus: finetune/data/nf-freshstack-v1/splits/nfcorpus/qmd-nf-freshstack-v1-nfcorpus-dev
+  fiqa: finetune/data/public-eval-v1/benchmarks/qmd-eval-v1-fiqa-dev
+  freshstack: finetune/data/nf-freshstack-v1/splits/freshstack/qmd-nf-freshstack-v1-freshstack-dev
+  scifact_archive: finetune/data/public-distill-v0/archives/scifact.zip

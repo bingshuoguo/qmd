@@ -1,5 +1,21 @@
 #!/usr/bin/env node
 
+/**
+ * Generic BEIR -> QMD benchmark converter.
+ *
+ * Every BEIR dataset ships the same three files (corpus.jsonl, queries.jsonl,
+ * qrels/test.tsv). The only things that differ between datasets are captured in
+ * a single BeirDatasetConfig; everything else is shared machinery. Per-dataset
+ * wrappers (beir/scifact.ts, beir/fiqa.ts, ...) supply a config and a CLI
+ * bootstrap, nothing more.
+ *
+ * The output qrels are ALWAYS binarized to the QMD bench contract
+ * (relevant_threshold 1, graded false, unjudged nonrelevant): a source qrel with
+ * score >= config.relevantThreshold becomes binary 1, anything below is dropped.
+ * For datasets that are already binary (threshold 1) this is the identity and the
+ * emitted bytes are unchanged.
+ */
+
 import {
   createHash,
   randomUUID,
@@ -22,12 +38,18 @@ import {
   parseQrelsTsv,
   parseQueriesJsonl,
   validateBenchmarkData,
-} from "../../src/bench/qrels.js";
+} from "../../../src/bench/qrels.js";
 
-export const SCIFACT_URL =
-  "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip";
-export const SCIFACT_ARCHIVE_MD5 = "5f7d1de60b170fc8027bb7898e2efca1";
-export const SCIFACT_BENCHMARK_ID = "qmd-expansion-scifact-v1";
+export type BeirDatasetConfig = {
+  benchmarkId: string;
+  sourceUrl: string;
+  archiveMd5: string;
+  /** A source qrel with score >= this threshold is relevant (binary 1). */
+  relevantThreshold: number;
+};
+
+/** The QMD bench contract only supports the test split, which every BEIR dataset stores here. */
+const TEST_QRELS_SUFFIX = "/qrels/test.tsv";
 
 type ZipEntry = {
   name: string;
@@ -78,7 +100,7 @@ type LeakageDecision = {
   confirmed: boolean;
 };
 
-type PrepareOptions = {
+export type PrepareOptions = {
   archive: string;
   output: string;
   trainingFiles: string[];
@@ -89,10 +111,10 @@ function hash(algorithm: "md5" | "sha256", bytes: Uint8Array | string): string {
   return createHash(algorithm).update(bytes).digest("hex");
 }
 
-export function verifyArchiveMd5(bytes: Uint8Array, expected = SCIFACT_ARCHIVE_MD5): void {
+export function verifyArchiveMd5(bytes: Uint8Array, expected: string): void {
   const actual = hash("md5", bytes);
   if (actual !== expected) {
-    throw new Error(`SciFact archive MD5 mismatch: expected ${expected}, got ${actual}`);
+    throw new Error(`archive MD5 mismatch: expected ${expected}, got ${actual}`);
   }
 }
 
@@ -260,7 +282,24 @@ function utf8Lf(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
-export function renderSciFactMarkdown(title: string, text: string): string {
+/**
+ * Leniently collect the qids referenced by a raw BEIR qrels file. Unlike
+ * parseQrelsTsv (which enforces the binary 0/1 output contract), the SOURCE file
+ * may carry graded scores (e.g. FiQA's 2/3), so it is only read for membership,
+ * never validated. The binarized output is still checked by parseQrelsTsv later.
+ */
+function parseSourceQrelsQids(text: string): Set<string> {
+  const lines = text.split(/\r?\n/);
+  const qids = new Set<string>();
+  for (let index = 1; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.length === 0) continue;
+    qids.add(line.split("\t")[0]!);
+  }
+  return qids;
+}
+
+export function renderCorpusMarkdown(title: string, text: string): string {
   return `# ${utf8Lf(title)}\n\n${utf8Lf(text)}\n`;
 }
 
@@ -411,7 +450,7 @@ function loadDecisions(path: string | undefined): Map<string, boolean> {
     ) {
       throw new Error("Invalid leakage decision record");
     }
-    const key = decisionKey(value as LeakageCandidate);
+    const key = decisionKey(value);
     if (decisions.has(key)) throw new Error(`Duplicate leakage decision for ${key}`);
     decisions.set(key, value.confirmed);
   }
@@ -419,6 +458,7 @@ function loadDecisions(path: string | undefined): Map<string, boolean> {
 }
 
 function buildLeakageReport(
+  config: BeirDatasetConfig,
   queries: SourceQueryRecord[],
   trainingFiles: string[],
   decisionsPath?: string,
@@ -473,7 +513,7 @@ function buildLeakageReport(
     }))
     .sort((left, right) => byteCompare(left.qid, right.qid));
   const report = {
-    benchmark_id: SCIFACT_BENCHMARK_ID,
+    benchmark_id: config.benchmarkId,
     benchmark_query_hashes,
     training_data: training.files,
     normalization: [
@@ -495,16 +535,33 @@ function buildLeakageReport(
   return { report, excludedQids: [...excluded].sort(byteCompare), pending };
 }
 
-function benchmarkYaml(hashes: {
+/**
+ * Map one raw qrels data line to its binarized form, or null to drop it.
+ * Returns null for empty lines, sub-threshold (nonrelevant) rows, and excluded
+ * qids; otherwise emits `qid\tdocid\t1`. For an already-binary dataset
+ * (threshold 1, all scores 1) this reproduces the input line verbatim.
+ */
+function binarizeQrelsLine(line: string, threshold: number, excluded: ReadonlySet<string>): string | null {
+  if (line.length === 0) return null;
+  const fields = line.split("\t");
+  const qid = fields[0]!;
+  const docid = fields[1];
+  const score = Number(fields[2]);
+  if (excluded.has(qid)) return null;
+  if (!(score >= threshold)) return null;
+  return `${qid}\t${docid}\t1`;
+}
+
+function benchmarkYaml(config: BeirDatasetConfig, hashes: {
   sourceQrels: string;
   excludedQids: string;
   leakageReport: string;
   convertedData: string;
 }): string {
-  return `benchmark_id: ${SCIFACT_BENCHMARK_ID}
+  return `benchmark_id: ${config.benchmarkId}
 source:
-  url: ${SCIFACT_URL}
-  archive_md5: ${SCIFACT_ARCHIVE_MD5}
+  url: ${config.sourceUrl}
+  archive_md5: ${config.archiveMd5}
   split: test
 source_qrels_sha256: ${hashes.sourceQrels}
 excluded_qids_sha256: ${hashes.excludedQids}
@@ -519,16 +576,20 @@ metrics: [recall_at_cutoffs, mrr_at_10, ndcg_at_10]
 `;
 }
 
-function convertArchive(options: PrepareOptions, outputRoot: string): { pending: number; hash: string } {
+function convertArchive(
+  config: BeirDatasetConfig,
+  options: PrepareOptions,
+  outputRoot: string,
+): { pending: number; hash: string } {
   const archiveBytes = readFileSync(options.archive);
-  verifyArchiveMd5(archiveBytes);
-  const extracted = join(dirname(outputRoot), `.scifact-extracted-${randomUUID()}`);
+  verifyArchiveMd5(archiveBytes, config.archiveMd5);
+  const extracted = join(dirname(outputRoot), `.beir-extracted-${randomUUID()}`);
   mkdirSync(extracted, { recursive: true });
   try {
     safeExtractZip(archiveBytes, extracted);
     const corpusPath = findUniqueSourceFile(extracted, "/corpus.jsonl");
     const queriesPath = findUniqueSourceFile(extracted, "/queries.jsonl");
-    const sourceQrelsPath = findUniqueSourceFile(extracted, "/qrels/test.tsv");
+    const sourceQrelsPath = findUniqueSourceFile(extracted, TEST_QRELS_SUFFIX);
     const corpus = jsonLines<SourceCorpusRecord>(
       readFileSync(corpusPath, "utf8"),
       "corpus.jsonl",
@@ -553,8 +614,7 @@ function convertArchive(options: PrepareOptions, outputRoot: string): { pending:
       },
     );
     const sourceQrelsBytes = readFileSync(sourceQrelsPath);
-    const sourceQrels = parseQrelsTsv(sourceQrelsBytes.toString("utf8"));
-    const qids = new Set(sourceQrels.map(qrel => qrel.qid));
+    const qids = parseSourceQrelsQids(sourceQrelsBytes.toString("utf8"));
     const benchmarkQueries = allQueries
       .filter(query => qids.has(query._id))
       .sort((left, right) => byteCompare(left._id, right._id));
@@ -564,6 +624,7 @@ function convertArchive(options: PrepareOptions, outputRoot: string): { pending:
       );
     }
     const leakage = buildLeakageReport(
+      config,
       benchmarkQueries,
       options.trainingFiles,
       options.decisions,
@@ -572,7 +633,8 @@ function convertArchive(options: PrepareOptions, outputRoot: string): { pending:
     const finalQueries = benchmarkQueries.filter(query => !excluded.has(query._id));
     const qrelsLines = sourceQrelsBytes.toString("utf8").split(/\r?\n/);
     const finalQrelsText = `${qrelsLines
-      .filter((line, index) => index === 0 || (line.length > 0 && !excluded.has(line.split("\t")[0]!)))
+      .map((line, index) => (index === 0 ? line : binarizeQrelsLine(line, config.relevantThreshold, excluded)))
+      .filter((line): line is string => line !== null && line.length > 0)
       .join("\n")}\n`;
 
     const corpusIds = new Set<string>();
@@ -596,7 +658,7 @@ function convertArchive(options: PrepareOptions, outputRoot: string): { pending:
         const relativePath = `${document._id}.md`;
         writeFileSync(
           join(outputRoot, "corpus", relativePath),
-          renderSciFactMarkdown(document.title, document.text),
+          renderCorpusMarkdown(document.title, document.text),
           "utf8",
         );
         return { doc_id: document._id, path: relativePath };
@@ -632,20 +694,23 @@ function convertArchive(options: PrepareOptions, outputRoot: string): { pending:
       leakageReport: hash("sha256", readFileSync(join(outputRoot, "leakage-report.json"))),
       convertedData,
     };
-    writeFileSync(join(outputRoot, "benchmark.yaml"), benchmarkYaml(hashes), "utf8");
+    writeFileSync(join(outputRoot, "benchmark.yaml"), benchmarkYaml(config, hashes), "utf8");
     return { pending: leakage.pending, hash: convertedData };
   } finally {
     rmSync(extracted, { recursive: true, force: true });
   }
 }
 
-export function prepareSciFact(options: PrepareOptions): { pending: number; hash: string } {
+export function prepareBeir(
+  config: BeirDatasetConfig,
+  options: PrepareOptions,
+): { pending: number; hash: string } {
   const output = resolve(options.output);
   if (existsSync(output)) throw new Error(`Output already exists: ${output}`);
   const staging = `${output}.staging-${randomUUID()}`;
   mkdirSync(staging, { recursive: true });
   try {
-    const result = convertArchive(options, staging);
+    const result = convertArchive(config, options, staging);
     mkdirSync(dirname(output), { recursive: true });
     renameSync(staging, output);
     return result;
@@ -655,7 +720,7 @@ export function prepareSciFact(options: PrepareOptions): { pending: number; hash
   }
 }
 
-export function verifyPreparedSciFact(output: string): { hash: string; pending: number } {
+export function verifyPreparedBeir(output: string): { hash: string; pending: number } {
   const root = resolve(output);
   const manifestText = readFileSync(join(root, "benchmark.yaml"), "utf8");
   const convertedMatch = manifestText.match(/^converted_data_sha256:\s*([a-f0-9]{64})$/m);
@@ -685,9 +750,9 @@ export function verifyPreparedSciFact(output: string): { hash: string; pending: 
 function usage(): never {
   throw new Error(
     "Usage:\n"
-    + "  prepare-scifact.ts prepare --archive <scifact.zip> --output <benchmark-dir> "
+    + "  beir/<dataset>.ts prepare --archive <dataset.zip> --output <benchmark-dir> "
     + "--training <data.jsonl> [--training <data.jsonl> ...] [--decisions <decisions.json>]\n"
-    + "  prepare-scifact.ts verify --output <benchmark-dir>",
+    + "  beir/<dataset>.ts verify --output <benchmark-dir>",
   );
 }
 
@@ -712,18 +777,23 @@ function parseArgs(argv: string[]): { mode: "prepare" | "verify"; options: Prepa
   return { mode, options: { archive, output, trainingFiles, decisions } };
 }
 
-const isEntrypoint = process.argv[1]
-  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
-if (isEntrypoint) {
+/** Shared CLI driver. Each per-dataset wrapper calls this behind its own entrypoint guard. */
+export function runBeirCli(config: BeirDatasetConfig, argv: string[]): void {
   try {
-    const { mode, options } = parseArgs(process.argv.slice(2));
+    const { mode, options } = parseArgs(argv);
     const result = mode === "prepare"
-      ? prepareSciFact(options)
-      : verifyPreparedSciFact(options.output);
+      ? prepareBeir(config, options)
+      : verifyPreparedBeir(options.output);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     if (result.pending > 0) process.exitCode = 2;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   }
+}
+
+/** Returns true when the given module URL is the invoked script (per-wrapper entrypoint guard). */
+export function isMainModule(moduleUrl: string): boolean {
+  return process.argv[1] !== undefined
+    && resolve(process.argv[1]) === resolve(fileURLToPath(moduleUrl));
 }
