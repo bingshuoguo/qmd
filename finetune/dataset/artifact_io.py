@@ -1,4 +1,4 @@
-"""Byte-level JSON/JSONL artifact I/O shared by release loading and evaluation."""
+"""Byte-level JSON/JSONL artifact I/O shared by dataset stages and evaluation."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def atomic_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -43,7 +44,8 @@ def atomic_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
         raise
 
 
-def atomic_json(path: Path, value: dict[str, Any]) -> None:
+def atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
