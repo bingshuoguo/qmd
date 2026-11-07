@@ -62,7 +62,7 @@ import {
   parseExpansionsJsonl,
 } from "./qrels.js";
 import { validateBenchmarkRunName } from "./run-name.js";
-import { VEC_TABLE } from "../vec-layout.js";
+import { VEC_ROWS_TABLE, VEC_TABLE } from "../vec-layout.js";
 import type {
   BenchmarkFixture,
   BenchmarkQuery,
@@ -574,8 +574,11 @@ async function openBenchmarkStore(
   const llm = new LlamaCpp({
     embedModel: profile?.embedding_model,
     rerankModel: profile?.reranker_model ?? undefined,
-    inactivityTimeoutMs: 5 * 60 * 1000,
-    disposeModelsOnInactivity: true,
+    // No inactivity disposal: a benchmark run is one long batch, and a dispose
+    // that fires mid-run (e.g. after a system sleep) leaves embed/rerank calls
+    // permanently failing with "Object is disposed", corrupting the run.
+    inactivityTimeoutMs: 0,
+    disposeModelsOnInactivity: false,
   });
   internal.llm = llm;
   return {
@@ -850,11 +853,16 @@ export function inspectBenchmarkIndex(
     if (chunks.length !== expectedChunkCount) complete = false;
     for (const chunk of chunks) {
       fingerprints.add(chunk.embed_fingerprint);
-      const hashSeq = `${row.hash}_${chunk.seq}`;
+      // The partitioned vec0 table keys rows by rowid; (hash, seq) resolves
+      // through vector_rows. The legacy table was keyed by `hash_seq` directly.
       const vector = hasVectorTable
         ? store.db.prepare(
-          `SELECT embedding FROM ${VEC_TABLE} WHERE hash_seq = ?`,
-        ).get(hashSeq) as { embedding: unknown } | undefined
+          `SELECT v.embedding FROM ${VEC_TABLE} v
+           JOIN ${VEC_ROWS_TABLE} r ON r.id = v.rowid
+           WHERE r.hash = ? AND r.seq = ? AND r.collection_id = (
+             SELECT id FROM vector_collection_ids WHERE name = ?
+           )`,
+        ).get(row.hash, chunk.seq, profile.collection_name) as { embedding: unknown } | undefined
         : undefined;
       if (!vector) complete = false;
       if (vector) {
