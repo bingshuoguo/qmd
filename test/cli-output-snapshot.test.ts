@@ -89,7 +89,7 @@ function normalize(s: string): string {
     .split(testDir).join("<TMP>")
     .replace(/\d+[smhd] ago/g, "<AGO>")
     .replace(/^Size:.*$/gm, "Size: <SIZE>")
-    .replace(/\([0-9a-f]{7,40}\)/g, "(<COMMIT>)")
+    .replace(/\([0-9a-f]{7,40}(-dirty)?\)/g, "(<COMMIT>)")
     .replace(/^qmd \d+\.\d+\.\d+ /gm, "qmd <VERSION> ");
 }
 
