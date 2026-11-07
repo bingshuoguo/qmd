@@ -84,3 +84,28 @@ SFT adapter it compares is run 03 (`sft-teacher-8b.yaml`).
 
 `finetune/experiments/grpo-retrieval/` (archive tag only) plus results in
 `artifacts/grpo-retrieval-20261102/`. Judged not worth pursuing for now.
+
+### 6. Post-merge SFT validation (2026-11-06 → 11-07)
+
+After merging 202 upstream commits (`e5e4527`, tobi/qmd e428df7..86d2365) and
+the legacy→partitioned vector-layout migration, the v2-VH final-adapter effect
+was re-validated against the G0 rank-fusion baseline (`4bf85e6`) with frozen
+Q8_0 profile-D expansions on FiQA test / SciFact / CQADup Android.
+
+Verdict: **effect fully preserved.** Merge effect on both arms n.s.
+(|Δ| ≤ 0.0015); SFT R@30 +0.0159 [+0.0091, +0.0229] significant on the merged
+stack ≈ pre-merge +0.0169; nDCG@10 +0.0036 n.s. ≈ +0.0040. End-to-end with
+expansions regenerated on the merged code: R@30 +0.0315 significant;
+609/648 generations byte-identical, the rest same-structure paraphrases
+(llama.cpp GPU nondeterminism).
+
+Two bench bugs surfaced by the migrated index were fixed in `f64c287`:
+`inspectBenchmarkIndex` still queried the partitioned vec table with the
+legacy `hash_seq` key, and `openBenchmarkStore` disposed the embed model
+mid-run after a system sleep. Hazard: `syncConfigToDb` rewrites the
+collection registry of any index opened by getStore()-style commands from the
+global config — pair `INDEX_PATH` with an isolated `QMD_CONFIG_DIR` when
+touching non-global indexes.
+
+Evidence: `artifacts/sft-serving-baseline/merge-eval-20261106/` (local, not in
+git; index copy deleted after evaluation).
