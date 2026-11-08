@@ -1,0 +1,282 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FTS 统计隔离实验报告</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: single reading column (~70ch) with full-width tables; verdict block first, then method, gates, results, interpretation */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1c2230; --muted: #5d6677; --line: #d3d8e2;
+  --accent: #2f55c4; --accent-soft: #e6ecfb;
+  --good: #1f7a4d; --good-soft: #e3f3ea; --warn: #9a6200; --warn-soft: #fbefdc;
+  --sans: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151c; --surface: #1a1f29; --fg: #e3e7ef; --muted: #98a1b3; --line: #343c4c;
+    --accent: #7f9dff; --accent-soft: #1f2a48; --good: #5cc98f; --good-soft: #15301f; --warn: #f0a83a; --warn-soft: #3a2a12; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151c; --surface: #1a1f29; --fg: #e3e7ef; --muted: #98a1b3; --line: #343c4c;
+  --accent: #7f9dff; --accent-soft: #1f2a48; --good: #5cc98f; --good-soft: #15301f; --warn: #f0a83a; --warn-soft: #3a2a12; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 15px; line-height: 1.7;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 36px 64px;
+}
+main { max-width: 900px; margin: 0 auto; display: grid; gap: 34px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font-size: 0.78rem; letter-spacing: 0.06em; color: var(--muted); font-family: var(--mono); }
+h1 { font-size: 1.85rem; line-height: 1.3; margin: 0; font-weight: 600; text-wrap: balance; }
+h2 { font-size: 1.2rem; margin: 0 0 10px; font-weight: 600; text-wrap: balance; }
+h3 { font-size: 1rem; margin: 18px 0 6px; font-weight: 600; }
+p { margin: 0 0 10px; max-width: 72ch; }
+ul, ol { margin: 0 0 10px; padding-left: 1.3em; max-width: 72ch; }
+li { margin: 3px 0; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--accent-soft); padding: 0 4px; border-radius: 3px; overflow-wrap: anywhere; }
+.meta { color: var(--muted); font-size: 0.88rem; }
+section { min-width: 0; }
+
+.verdict { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--good); border-radius: 6px; padding: 18px 20px; display: grid; gap: 10px; }
+.verdict .tag { display: inline-block; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.05em; color: var(--good); background: var(--good-soft); padding: 2px 10px; border-radius: 99px; width: fit-content; }
+.verdict p, .verdict ul { margin: 0; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 2px; }
+.kpi .v { font-family: var(--mono); font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--muted); font-size: 0.82rem; }
+
+.tw { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; margin: 6px 0 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+td.wrap, th.wrap { white-space: normal; min-width: 220px; }
+thead th { color: var(--muted); font-weight: 500; font-size: 0.78rem; letter-spacing: 0.03em; background: var(--bg); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-family: var(--mono); }
+.pass { color: var(--good); font-weight: 600; }
+.ns { color: var(--muted); }
+.sig { color: var(--warn); font-weight: 600; }
+.note { background: var(--warn-soft); border-radius: 6px; padding: 12px 16px; font-size: 0.92rem; }
+.note p:last-child { margin: 0; }
+pre { font-family: var(--mono); font-size: 0.8rem; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; overflow-x: auto; margin: 6px 0 12px; line-height: 1.55; }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">experiment/fts-scope-isolation · qmd 2ad5c78 · 2026-11-07 → 11-08</div>
+    <h1>FTS 统计隔离实验报告</h1>
+    <p class="meta">问题：BM25 只用被查询 collection 的统计打分（方案 A：每个数据集一个独立 index），检索质量会不会变差？</p>
+  </header>
+
+  <section class="verdict">
+    <span class="tag">结论：非劣效，通过</span>
+    <p>把 BM25 统计限定在目标 collection 内，端到端检索质量<strong>没有可测量的变化</strong>，按预先确定的规则判定为非劣效。同时，限定范围的 FTS 查询快了 4 到 25 倍。</p>
+    <ul>
+      <li>主终点（hybrid + rerank，q8 扩展，三个数据集宏平均）：nDCG@10 变化 <strong>+0.0000</strong>，95% CI [−0.0004, +0.0004]；R@30 变化 <strong>−0.0001</strong>，CI [−0.0003, +0.0000]。两个下界都远高于阈值（−0.005 / −0.01）。</li>
+      <li>所有有效性检查都通过：向量结果逐个 query 完全一致，BM25 分数和新建的 FTS 表完全一致，index 指纹和封存的 G0 manifest 一致。</li>
+      <li>效果这么小，主要因为 qmd 的 FTS 查询把所有词用 AND 连接，51% 到 94% 的自然语言原始 query 根本匹配不到文档。统计只影响少数有匹配的 query 的排序，而这些变化又被 RRF 名次融合和 reranker 进一步冲淡。</li>
+    </ul>
+  </section>
+
+  <div class="kpis">
+    <div class="kpi"><span class="v">+0.0000</span><span class="l">q8 nDCG@10（I − S，宏平均）</span></div>
+    <div class="kpi"><span class="v">−0.0001</span><span class="l">q8 R@30（I − S，宏平均）</span></div>
+    <div class="kpi"><span class="v">246 → 59 ms</span><span class="l">FiQA 限定范围 BM25 查询 p50</span></div>
+    <div class="kpi"><span class="v">4.9%</span><span class="l">q8 top-10 有变化的 query 比例（FiQA / Android）</span></div>
+  </div>
+
+  <section>
+    <h2>1. 背景</h2>
+    <p><code>documents_fts</code> 是所有 collection 共用的一张 FTS5 表。查询结果按 collection 精确过滤，但 BM25 的 IDF 和 avgdl 按整张表计算。我们希望改成「查询范围就是语料」：一个 collection 的检索结果只取决于它自己。上线前需要先确认，检索质量不会因此变差。</p>
+    <p>评测用的 G0 index 有 11 个 collection、256,673 篇文档，全部在一张 FTS 表里。其中 <code>fiqa-dev</code> 和 <code>fiqa-test</code> 指向同一份语料（57,638 个 hash 全部重合），<code>scifact-train</code> 和 <code>scifact-v1</code> 重合 5,164/5,183。也就是说，过去的评测中 FiQA 和 SciFact 的领域词 DF 都被翻倍了。</p>
+  </section>
+
+  <section>
+    <h2>2. 方法</h2>
+    <h3>构造 index：复制后删除，不重新 embed</h3>
+    <p>先把 G0 index 复制 6 份，再对副本执行 <code>qmd collection remove</code> 删掉不需要的 collection。删除只影响被删 collection 的 documents、FTS 行和向量分区，目标 collection 的数据不变。所以不需要重新 embed，两种 index 唯一的区别就是 FTS 表里还有哪些文档。</p>
+    <div class="tw"><table>
+      <thead><tr><th>代号</th><th>内容</th><th class="num">FTS 行数</th><th>用于</th></tr></thead>
+      <tbody>
+        <tr><td><code>S</code></td><td>完整副本，11 个 collection</td><td class="num">256,673</td><td>对照组，所有路线</td></tr>
+        <tr><td><code>I-fiqa</code></td><td>只保留 fiqa-test</td><td class="num">57,638</td><td>处理组</td></tr>
+        <tr><td><code>I-scifact</code></td><td>只保留 scifact-v1</td><td class="num">5,183</td><td>处理组</td></tr>
+        <tr><td><code>I-android</code></td><td>只保留 cqadup-android</td><td class="num">22,998</td><td>处理组</td></tr>
+        <tr><td><code>D-fiqa</code></td><td>S 删掉 fiqa-dev</td><td class="num">199,035</td><td>分解：只去掉重复语料（仅 R1）</td></tr>
+        <tr><td><code>D-scifact</code></td><td>S 删掉 scifact-train</td><td class="num">251,490</td><td>同上</td></tr>
+      </tbody>
+    </table></div>
+    <p>G0 index 实际上还是旧的向量存储格式（<code>vectors_vec</code>），每个副本第一次打开时会自动迁移到按 collection 分区的格式，约需 1 分钟。之后所有副本（包括 S）都执行了同样的 <code>qmd cleanup</code>，清空了 G0 遗留的 1,034 条 LLM 缓存，避免只有 S 能命中旧的 rerank 缓存。</p>
+
+    <h3>实验路线</h3>
+    <div class="tw"><table>
+      <thead><tr><th>路线</th><th class="wrap">内容</th><th>index</th></tr></thead>
+      <tbody>
+        <tr><td>R1 BM25 单路</td><td class="wrap">原始 query 调用 <code>searchFTS</code>，top 30</td><td>S、D、I</td></tr>
+        <tr><td>R2 向量单路</td><td class="wrap">原始 query 调用 <code>searchVec</code>，top 30。对照检查，结果必须完全一致</td><td>S、I</td></tr>
+        <tr><td>R3 hybrid + rerank</td><td class="wrap"><code>qmd bench</code> 跑 raw 和 q8（冻结的 G0 Q8_0 扩展）。rank fusion，candidate_limit 40，per_list_limit 30。<strong>主终点</strong></td><td>S、I（12 次运行）</td></tr>
+        <tr><td>R4 strong-signal</td><td class="wrap">按生产阈值（0.85 / 分差 0.15）判断是否触发。触发的 query 用不带扩展的 hybrid 结果，其余用 R3 的 q8 结果，组成「贴近生产」的结果</td><td>S、I</td></tr>
+      </tbody>
+    </table></div>
+    <p>R3 按数据集交错执行（S-raw → I-raw → S-q8 → I-q8），全程接电源并使用 <code>caffeinate</code>。统计方法：配对、按数据集分层的 bootstrap，20,000 次重采样，seed 42，计算三个数据集的宏平均。和 merge-eval 一致。</p>
+    <p><strong>判定规则（运行前确定）</strong>：q8 组宏平均 nDCG@10 的 95% CI 下界 &gt; −0.005，且 R@30 下界 &gt; −0.01，即判定为非劣效。</p>
+  </section>
+
+  <section>
+    <h2>3. 有效性检查</h2>
+    <div class="tw"><table>
+      <thead><tr><th>检查</th><th class="wrap">标准</th><th class="wrap">结果</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>G1 index 指纹</td><td class="wrap">S 和 I 用同一份 <code>index-manifest.json</code>，bench 运行时校验通过</td><td class="wrap">12 次运行全部通过；指纹 <code>695d…</code> / <code>725d…</code> / <code>3ac7…</code> 和封存的 G0 manifest 一致</td><td class="pass">通过</td></tr>
+        <tr><td>G2 向量结果一致</td><td class="wrap">每个 query 的 doc_id 列表完全相同</td><td class="wrap">FiQA 648、SciFact 300、Android 699 个 query 全部相同；分数差为 0</td><td class="pass">通过</td></tr>
+        <tr><td>G3 FTS 行数</td><td class="wrap">I 的 FTS 行数 = 目标 collection 的文档数</td><td class="wrap">57,638 / 5,183 / 22,998，全部相等</td><td class="pass">通过</td></tr>
+        <tr><td>G4 删除后统计正确</td><td class="wrap">50 个 query 的 <code>bm25()</code> 和新建的 FTS5 表一致</td><td class="wrap">6 个副本全部一致：排序无差异，分数差为 0</td><td class="pass">通过</td></tr>
+        <tr><td>G5 缓存状态</td><td class="wrap">所有副本执行同样的 cleanup</td><td class="wrap">6 个副本的 <code>llm_cache</code> 都是 0 条</td><td class="pass">通过</td></tr>
+        <tr><td>运行完整性</td><td class="wrap">没有 retrieval 错误</td><td class="wrap">12 次运行全部 completed，错误数 0</td><td class="pass">通过</td></tr>
+      </tbody>
+    </table></div>
+    <p>额外的复现性证据：S 组 6 次运行的指标和 merge-eval（commit <code>e5e4527</code>）的结果在四位小数上完全一致，例如 FiQA raw 0.4654 / 0.6242、Android q8 0.5366 / 0.7695。</p>
+  </section>
+
+  <section>
+    <h2>4. 主结果：hybrid + rerank（R3）</h2>
+    <div class="tw"><table>
+      <thead><tr><th>数据集</th><th>组</th><th class="num">S nDCG@10</th><th class="num">I nDCG@10</th><th class="num">S R@30</th><th class="num">I R@30</th><th class="num">top-10 变化</th></tr></thead>
+      <tbody>
+        <tr><td>FiQA</td><td>raw</td><td class="num">0.4654</td><td class="num">0.4654</td><td class="num">0.6242</td><td class="num">0.6234</td><td class="num">8.3%</td></tr>
+        <tr><td>FiQA</td><td>q8</td><td class="num">0.4681</td><td class="num">0.4682</td><td class="num">0.6558</td><td class="num">0.6555</td><td class="num">4.9%</td></tr>
+        <tr><td>SciFact</td><td>raw</td><td class="num">0.7645</td><td class="num">0.7645</td><td class="num">0.9356</td><td class="num">0.9356</td><td class="num">0.0%</td></tr>
+        <tr><td>SciFact</td><td>q8</td><td class="num">0.7692</td><td class="num">0.7692</td><td class="num">0.9389</td><td class="num">0.9389</td><td class="num">0.0%</td></tr>
+        <tr><td>Android</td><td>raw</td><td class="num">0.5334</td><td class="num">0.5318</td><td class="num">0.7569</td><td class="num">0.7567</td><td class="num">9.2%</td></tr>
+        <tr><td>Android</td><td>q8</td><td class="num">0.5366</td><td class="num">0.5366</td><td class="num">0.7695</td><td class="num">0.7695</td><td class="num">4.9%</td></tr>
+      </tbody>
+    </table></div>
+    <div class="tw"><table>
+      <thead><tr><th>比较（I − S，宏平均）</th><th>指标</th><th class="num">变化</th><th class="num">95% CI</th><th>判断</th></tr></thead>
+      <tbody>
+        <tr><td><strong>q8（主终点）</strong></td><td>nDCG@10</td><td class="num">+0.0000</td><td class="num">[−0.0004, +0.0004]</td><td class="ns">不显著</td></tr>
+        <tr><td><strong>q8（主终点）</strong></td><td>R@30</td><td class="num">−0.0001</td><td class="num">[−0.0003, +0.0000]</td><td class="ns">不显著</td></tr>
+        <tr><td>q8</td><td>MRR@10</td><td class="num">+0.0000</td><td class="num">[−0.0002, +0.0003]</td><td class="ns">不显著</td></tr>
+        <tr><td>q8</td><td>R@10</td><td class="num">+0.0000</td><td class="num">[−0.0014, +0.0014]</td><td class="ns">不显著</td></tr>
+        <tr><td>raw</td><td>nDCG@10</td><td class="num">−0.0005</td><td class="num">[−0.0013, +0.0002]</td><td class="ns">不显著（Android −0.0016）</td></tr>
+        <tr><td>raw</td><td>R@30</td><td class="num">−0.0003</td><td class="num">[−0.0009, +0.0000]</td><td class="ns">不显著</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>判定</strong>：q8 组 nDCG@10 下界 −0.0004 &gt; −0.005，R@30 下界 −0.0003 &gt; −0.01，<span class="pass">非劣效</span>。CI 宽度不到 0.001，比阈值窄一个数量级，说明这个结论不是因为样本太少、区间太宽而勉强通过的。</p>
+    <p>SciFact 完全没有变化：300 个原始 query 中有 282 个 FTS 结果为空，剩下的 query 在两种 index 下 BM25 排序也相同。</p>
+  </section>
+
+  <section>
+    <h2>5. BM25 单路（R1）</h2>
+    <h3>原始 query 大多匹配不到文档</h3>
+    <p><code>buildFTS5Query</code> 用 AND 连接所有查询词，自然语言问题通常找不到同时包含所有词的文档：</p>
+    <div class="tw"><table>
+      <thead><tr><th>数据集</th><th class="num">FTS 结果为空的 query</th><th class="num">返回满 30 条的 query</th><th class="num">S nDCG@10</th><th class="num">D nDCG@10</th><th class="num">I nDCG@10</th></tr></thead>
+      <tbody>
+        <tr><td>FiQA</td><td class="num">435 / 648（67%）</td><td class="num">35</td><td class="num">0.0297</td><td class="num">0.0299</td><td class="num">0.0301</td></tr>
+        <tr><td>SciFact</td><td class="num">282 / 300（94%）</td><td class="num">0</td><td class="num">0.0500</td><td class="num">0.0500</td><td class="num">0.0500</td></tr>
+        <tr><td>Android</td><td class="num">359 / 699（51%）</td><td class="num">31</td><td class="num">0.2128</td><td class="num">0.2128</td><td class="num">0.2087</td></tr>
+      </tbody>
+    </table></div>
+    <p>哪些文档能匹配上和统计无关，所以 S、D、I 三种 index 下为空的 query 完全相同，统计只影响有匹配的 query 的排序。作为参考，BEIR 的 BM25（OR 语义）在 FiQA 上的 nDCG@10 约为 0.24。在 hybrid 流程里，BM25 主要通过 <code>lex:</code> 扩展（短关键词）起作用。</p>
+
+    <h3>变化来自哪里</h3>
+    <div class="tw"><table>
+      <thead><tr><th>比较（宏平均）</th><th class="num">nDCG@10</th><th class="num">95% CI</th><th>判断</th><th class="num">R@30</th></tr></thead>
+      <tbody>
+        <tr><td>I − S（总变化）</td><td class="num">−0.0013</td><td class="num">[−0.0024, −0.0003]</td><td class="sig">显著（Android −0.0042）</td><td class="num">−0.0003 <span class="ns">不显著</span></td></tr>
+        <tr><td>D − S（只去掉重复语料）</td><td class="num">+0.0001</td><td class="num">[−0.0000, +0.0002]</td><td class="ns">不显著</td><td class="num">+0.0000</td></tr>
+        <tr><td>I − D（去掉其他领域语料）</td><td class="num">−0.0013</td><td class="num">[−0.0024, −0.0004]</td><td class="sig">显著</td><td class="num">−0.0003 <span class="ns">不显著</span></td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li><strong>重复语料几乎没有影响。</strong>重复一份语料会让所有领域词的 DF 一起翻倍，IDF 整体平移，同时包含这些词的文档之间相对顺序基本不变。</li>
+      <li><strong>BM25 单路下，隔离反而让 Android 略差</strong>（nDCG@10 −0.0042）。一个可能的解释是：只用 Android 的 2.3 万篇文档时，IDF 的估计不如在 25.7 万篇（包括另外三个 CQADupStack 子论坛）上稳定。这个解释<strong>没有验证</strong>，而且这个差异在 hybrid q8 中完全消失（−0.0000）。</li>
+      <li>FiQA 和 Android 约有 12.5% 的 query 的 BM25 top-10 发生变化；到 hybrid q8 阶段，这个比例降到约 4.9%。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>6. Strong-signal 跳过扩展（R4）</h2>
+    <p>以往的评测都固定传入 <code>originalFts</code>，这条生产路径从来没有被测量过。</p>
+    <div class="tw"><table>
+      <thead><tr><th>数据集</th><th class="num">S 触发</th><th class="num">I 触发</th></tr></thead>
+      <tbody>
+        <tr><td>FiQA</td><td class="num">56 / 648（8.6%）</td><td class="num">55 / 648</td></tr>
+        <tr><td>SciFact</td><td class="num">15 / 300（5.0%）</td><td class="num">15 / 300</td></tr>
+        <tr><td>Android</td><td class="num">142 / 699（20.3%）</td><td class="num">140 / 699</td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>隔离后触发率基本不变（只少了 1 到 2 个 query），<code>0.85</code> / <code>0.15</code> 这两个阈值<strong>不需要重新标定</strong>。</li>
+      <li>「贴近生产」结果的 I − S：nDCG@10 +0.0000 [−0.0004, +0.0004]，R@30 −0.0001 [−0.0003, +0.0000]，和 R3 结论一致。</li>
+      <li>附带的新发现：在同一个 index 内，「触发就跳过扩展」相比「始终使用 q8 扩展」，nDCG@10 −0.0007 [−0.0017, +0.0004]、R@30 −0.0005 [−0.0025, +0.0014]，都不显著。也就是说，strong-signal 跳过扩展为 5% 到 20% 的 query 省掉了扩展模型调用，质量没有可测量的损失。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>7. 延迟</h2>
+    <div class="tw"><table>
+      <thead><tr><th>数据集</th><th class="num">BM25 p50：S</th><th class="num">D</th><th class="num">I</th><th class="num">BM25 p95：S → I</th><th class="num">hybrid q8 p50：S → I</th></tr></thead>
+      <tbody>
+        <tr><td>FiQA</td><td class="num">246 ms</td><td class="num">198 ms</td><td class="num">59 ms</td><td class="num">961 → 210 ms</td><td class="num">6.77 → 6.31 s</td></tr>
+        <tr><td>SciFact</td><td class="num">102 ms</td><td class="num">100 ms</td><td class="num">4 ms</td><td class="num">466 → 14 ms</td><td class="num">6.66 → 6.36 s</td></tr>
+        <tr><td>Android</td><td class="num">154 ms</td><td class="num">—</td><td class="num">18 ms</td><td class="num">861 → 65 ms</td><td class="num">4.39 → 3.96 s</td></tr>
+      </tbody>
+    </table></div>
+    <p>在共享 index 上，限定 collection 的查询要先物化所有 collection 的全部匹配，再做过滤；collection 越小，这部分浪费越大。hybrid 每个 query 要执行好几次 FTS（原始 query 加上 lex 扩展），所以端到端 p50 快了 0.3 到 0.45 秒（5% 到 10%）。这些延迟数据来自同一台机器的单次运行，只能作为方向参考。</p>
+  </section>
+
+  <section>
+    <h2>8. 为什么影响这么小</h2>
+    <ol>
+      <li><strong>AND 语义</strong>：大多数原始 query 根本没有 FTS 结果，统计没有机会影响它们。</li>
+      <li><strong>统计只改变排序，不改变匹配集合</strong>：哪些文档能被召回完全不受影响，变化的只是同时包含所有查询词的文档之间怎么排。</li>
+      <li><strong>只用名次的融合</strong>：FTS 列表进入 RRF 时只用名次，最终排序又由「RRF 名次 + rerank 名次」融合决定，BM25 名次的局部变化被向量列表和 reranker 冲淡。</li>
+      <li><strong>重复语料只造成整体平移</strong>：DF 翻倍对同一 query 下所有文档的影响方向一致，相对顺序几乎不变。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>9. 建议</h2>
+    <ol>
+      <li><strong>可以采纳「collection 内统计」这个原则。</strong>质量非劣效已经得到证实，同时还有两项实际收益：结果可复现（一个 collection 的排序不再受 index 里其他 collection 影响），以及限定范围的查询快 4 到 25 倍。</li>
+      <li><strong>不要期待质量提升。</strong>改动的理由是语义清晰、可复现和延迟，不是 nDCG。</li>
+      <li><strong>实现时还需要单独验证的两个场景</strong>（本实验没有覆盖）：
+        <ul>
+          <li><strong>小 collection</strong>：本实验最小的 collection 有 5,183 篇。几十到几百篇时，IDF 截断的影响需要另外测，可以从 SciFact 中抽样出小语料来做。</li>
+          <li><strong>多 collection 查询</strong>：本实验每个 query 都只查一个 collection。方案 C 下跨表按分数合并的效果，需要另外评测。</li>
+        </ul>
+      </li>
+      <li><strong>Strong-signal 阈值保持不变</strong>，隔离后触发率基本相同。</li>
+      <li><strong>以后的评测 index 应该去掉重复语料，或者每个数据集单独建 index。</strong>这次测出来的影响可以忽略，但这样做能消除一个不必要的干扰因素。</li>
+      <li><strong>值得单独研究的现象</strong>：AND 语义让 51% 到 94% 的原始 query 在 FTS 中没有任何结果。原始 query 的 FTS 列表目前对大多数 query 没有贡献。是否需要在 AND 没有结果时退回到 OR，可以作为一个独立课题，用同一套评测来验证。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>10. 局限</h2>
+    <ul>
+      <li>只测了 3 个英文数据集（FiQA、SciFact、CQADupStack Android），collection 都有几千篇以上文档，没有测试 CJK 语料。</li>
+      <li>非劣效阈值是根据之前 SFT 效应的量级主观确定的。实际 CI 比阈值窄得多，阈值的具体取值不影响结论。</li>
+      <li>bench 结果中 <code>qmd_dirty</code> 为 true，是因为分支上有新增的实验脚本，<code>src/</code> 没有任何改动（commit <code>2ad5c78</code>）。</li>
+      <li>延迟是单机单次测量，没有做重复实验。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>11. 复现</h2>
+    <p>脚本在 <code>finetune/experiments/fts-scope-isolation/</code>（分支 <code>experiment/fts-scope-isolation</code>），数据和日志在 <code>artifacts/fts-scope-isolation/</code>（不进 git）。</p>
+<pre># 1. 复制 G0 index 6 份并复制配置（见 README 第 6 节），然后：
+finetune/experiments/fts-scope-isolation/setup.sh     # collection remove + 统一 cleanup
+# 2. 探针 + 12 次 bench（约 10 小时）
+caffeinate -i finetune/experiments/fts-scope-isolation/run-all.sh
+# 3. 分析
+python3 -I finetune/experiments/fts-scope-isolation/analyze.py   # → artifacts/fts-scope-isolation/summary.json</pre>
+    <p class="meta">时间线：setup 2026-11-07 23:49–00:03；探针 00:03–00:58；R3 00:58–10:04（12 次运行，约 9 小时）。</p>
+  </section>
+</main>
