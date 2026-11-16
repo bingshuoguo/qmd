@@ -118,7 +118,7 @@ if (!values["skip-index-verify"]) {
   }
 }
 
-type ScoreItem = { source_id: string; qid: string; completion: string; truncated?: boolean };
+type ScoreItem = { source_id: string; qid: string; completion: string; truncated?: boolean; with_ranking?: boolean };
 type ScoreResult = {
   source_id: string;
   qid: string;
@@ -126,10 +126,13 @@ type ScoreResult = {
   error: string | null;
   metrics: CanonicalMetrics;
   raw_metrics: CanonicalMetrics;
+  ranking?: string[];
   ms: number;
 };
 
-async function retrieve(sourceId: string, qid: string, expansions: [string, string][]): Promise<CanonicalMetrics> {
+type Retrieved = { metrics: CanonicalMetrics; ranking: string[] };
+
+async function retrieve(sourceId: string, qid: string, expansions: [string, string][]): Promise<Retrieved> {
   const source = sources.get(sourceId)!;
   const results = await retrieveForBenchmark(storeFor(sourceId), {
     originalQuery: source.queryByQid.get(qid)!,
@@ -149,10 +152,10 @@ async function retrieve(sourceId: string, qid: string, expansions: [string, stri
     if (!docId) throw new Error(`Unknown result path: ${result.file}`);
     if (!seen.has(docId)) { seen.add(docId); docIds.push(docId); }
   }
-  return scoreCanonicalRanking(docIds, source.relevant.get(qid)!, CUTOFFS);
+  return { metrics: scoreCanonicalRanking(docIds, source.relevant.get(qid)!, CUTOFFS), ranking: docIds };
 }
 
-const rawCache = new Map<string, CanonicalMetrics>();
+const rawCache = new Map<string, Retrieved>();
 
 async function scoreItem(item: ScoreItem): Promise<ScoreResult> {
   const start = performance.now();
@@ -176,14 +179,15 @@ async function scoreItem(item: ScoreItem): Promise<ScoreResult> {
     : parsed.diagnostics.length > 0
       ? `${parsed.diagnostics[0]!.code} at line ${parsed.diagnostics[0]!.line}`
       : null;
-  const metrics = error ? raw : await retrieve(item.source_id, item.qid, parsed.output as [string, string][]);
+  const scored = error ? raw : await retrieve(item.source_id, item.qid, parsed.output as [string, string][]);
   return {
     source_id: item.source_id,
     qid: item.qid,
     status: error ? "format_error" : "ok",
     error,
-    metrics,
-    raw_metrics: raw,
+    metrics: scored.metrics,
+    raw_metrics: raw.metrics,
+    ...(item.with_ranking && { ranking: scored.ranking }),
     ms: Math.round(performance.now() - start),
   };
 }
