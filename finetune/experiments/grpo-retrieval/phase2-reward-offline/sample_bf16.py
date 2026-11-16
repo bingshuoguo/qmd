@@ -29,6 +29,7 @@ ap.add_argument("--max-new-tokens", type=int, default=640)
 ap.add_argument("--batch-qids", type=int, default=2)
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--limit-batches", type=int, default=0)
+ap.add_argument("--qids", default=None, help="TSV of source_id<TAB>qid; restricts sampling to these")
 args = ap.parse_args()
 
 template = Path(args.template).read_text()
@@ -57,6 +58,9 @@ if out_path.exists():
     done = {(r["source_id"], r["qid"]) for r in map(json.loads, open(out_path))}
 
 rng = random.Random(args.seed)
+allow = None
+if args.qids:
+    allow = {tuple(l.rstrip("\n").split("\t")) for l in open(args.qids) if l.strip()}
 jobs = []
 for spec in args.source:
     sid, rest = spec.split("=", 1)
@@ -70,6 +74,8 @@ for spec in args.source:
         if len(p) >= 3 and int(p[2]) == 1:
             rels.setdefault(p[0], set()).add(p[1])
     scorable = [q for q in queries if q["qid"] in rels]
+    if allow is not None:
+        scorable = [q for q in scorable if (sid, q["qid"]) in allow]
     rng.shuffle(scorable)
     jobs += [(sid, q["qid"], q["query"]) for q in scorable[: int(n)]]
 
