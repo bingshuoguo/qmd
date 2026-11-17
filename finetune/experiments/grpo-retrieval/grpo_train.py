@@ -24,7 +24,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from reward_client import RewardClient  # noqa: E402
+from reward_client import make_client  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
@@ -39,7 +39,7 @@ ap.add_argument("--lr", type=float, default=1e-5)
 ap.add_argument("--beta", type=float, default=0.04)
 ap.add_argument("--lora-r", type=int, default=16)
 ap.add_argument("--seed", type=int, default=42)
-ap.add_argument("--url", default="http://127.0.0.1:8787")
+ap.add_argument("--url", default="http://127.0.0.1:8787", help="comma-separated for several servers")
 args = ap.parse_args()
 
 tok = AutoTokenizer.from_pretrained(args.model)
@@ -61,7 +61,7 @@ dataset = Dataset.from_list([
     {"prompt": render(r["query"]), "source_id": r["source_id"], "qid": r["qid"]} for r in rows
 ])
 
-client = RewardClient(args.url)
+client = make_client(args.url)
 eos_ids = {tok.convert_tokens_to_ids("<|im_end|>"), tok.eos_token_id}
 last: dict = {}  # results of the latest scoring call, read by the zero-weight logging funcs
 
