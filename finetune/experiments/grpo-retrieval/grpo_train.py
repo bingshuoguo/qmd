@@ -35,6 +35,7 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--max-steps", type=int, default=200)
 ap.add_argument("--queries-per-step", type=int, default=8)
 ap.add_argument("--G", type=int, default=8)
+ap.add_argument("--grad-accum", type=int, default=1, help="split each step's completions into this many backward passes")
 ap.add_argument("--lr", type=float, default=1e-5)
 ap.add_argument("--beta", type=float, default=0.04)
 ap.add_argument("--lora-r", type=int, default=16)
@@ -98,8 +99,8 @@ config = GRPOConfig(
     output_dir=args.out,
     max_steps=args.max_steps,
     learning_rate=args.lr,
-    per_device_train_batch_size=args.queries_per_step * args.G,
-    gradient_accumulation_steps=1,
+    per_device_train_batch_size=args.queries_per_step * args.G // args.grad_accum,
+    gradient_accumulation_steps=args.grad_accum,  # one generation round of queries_per_step x G per optimizer step
     num_generations=args.G,
     max_completion_length=640,
     temperature=0.7,

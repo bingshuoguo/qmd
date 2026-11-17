@@ -11,6 +11,8 @@ Spec: docs/specs/2026-10-21-dpo-preference-learnability-gate.md §8.3-8.4.
   python rm_train.py --dir <gate-v1> --template <template.txt> --out <run dir>
       [--frac 0.5]       # learning curve: keep this share of train queries
       [--min-gap 0.2]    # sensitivity: train only on pairs with gap >= this
+      [--skip-test]      # hyperparameter search on dev only; the test split is not read
+      [--test-only]      # later: read the test split once for <out>/best (same args as the --skip-test run)
 
 Writes <out>/result.json (dev curve, test pair accuracy overall/per source/by gap, RM-BoN-8) and <out>/best/.
 """
@@ -42,6 +44,8 @@ ap.add_argument("--min-gap", type=float, default=0.0)
 ap.add_argument("--dev-frac", type=float, default=0.15)
 ap.add_argument("--max-train-pairs", type=int, default=0, help="smoke test only")
 ap.add_argument("--seed", type=int, default=42)
+ap.add_argument("--skip-test", action="store_true", help="hyperparameter search: stop after training, dev only")
+ap.add_argument("--test-only", action="store_true", help="evaluate <out>/best from an earlier --skip-test run")
 args = ap.parse_args()
 
 root, out = Path(args.dir), Path(args.out)
@@ -169,8 +173,11 @@ sched = torch.optim.lr_scheduler.LambdaLR(
 eval_every = max(1, steps_per_epoch // args.evals_per_epoch)
 
 best, curve, step, t0 = -1.0, [], 0, time.time()
+if args.test_only:
+    prev = json.loads((out / "result.json").read_text())
+    best, curve = prev["best_dev_acc"], prev["dev_curve"]
 model.train()
-for ep in range(args.epochs):
+for ep in range(0 if args.test_only else args.epochs):
     order = train_pairs[:]
     random.Random(f"{args.seed}:ep{ep}").shuffle(order)
     for b in range(0, len(order), args.batch):
@@ -200,6 +207,12 @@ for ep in range(args.epochs):
                 best = dev["acc_query_macro"]
                 model.save_pretrained(out / "best")
                 say(f"  new best -> {out / 'best'}")
+
+if args.skip_test:
+    (out / "result.json").write_text(json.dumps({"args": vars(args), "best_dev_acc": best, "dev_curve": curve,
+                                                 "train_pairs": len(train_pairs)}, indent=2))
+    say(f"SKIP TEST: best dev {best:.4f}")
+    raise SystemExit(0)
 
 # ---------------- test (read once, best checkpoint) ----------------
 from peft import PeftModel  # noqa: E402
