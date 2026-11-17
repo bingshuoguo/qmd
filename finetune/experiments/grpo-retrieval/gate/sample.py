@@ -5,6 +5,7 @@
 
 Output rows: {source_id, qid, query, split, greedy: {...}, samples: [{completion, tokens, truncated}]}.
 Resumable: qids already in --out are skipped.
+Evaluation of a trained policy: --adapter <LoRA dir> --G 0 (greedy only).
 """
 import argparse
 import json
@@ -16,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", required=True)
+ap.add_argument("--adapter", default=None, help="LoRA adapter merged onto --model before generating")
 ap.add_argument("--queries", required=True)
 ap.add_argument("--template", required=True)
 ap.add_argument("--train-sample", required=True)
@@ -43,7 +45,11 @@ def render(query: str) -> str:
 train_row = json.loads(next(open(args.train_sample)))
 assert render(train_row["query"]) == train_row["prompt"], "prompt rendering differs from SFT training"
 
-model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).to("cuda").eval()
+model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16)
+if args.adapter:
+    from peft import PeftModel
+    model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
+model = model.to("cuda").eval()
 eos_ids = {tok.convert_tokens_to_ids("<|im_end|>"), tok.eos_token_id}
 
 out = Path(args.out)
@@ -69,13 +75,14 @@ with open(out, "a") as f:
         common = dict(max_new_tokens=args.max_new_tokens, pad_token_id=tok.pad_token_id)
         with torch.no_grad():
             greedy = model.generate(**enc, do_sample=False, **common)
-            torch.manual_seed(args.seed + b)
-            sampled = model.generate(**enc, do_sample=True, temperature=args.temperature, top_k=0, top_p=1.0,
-                                     num_return_sequences=args.G, **common)
+            sampled = []
+            if args.G:
+                torch.manual_seed(args.seed + b)
+                sampled = model.generate(**enc, do_sample=True, temperature=args.temperature, top_k=0, top_p=1.0,
+                                         num_return_sequences=args.G, **common)[:, width:].tolist()
         greedy = greedy[:, width:].tolist()
-        sampled = sampled[:, width:].tolist()
         for i, q in enumerate(batch):
-            row = {k: q[k] for k in ("source_id", "qid", "query", "split")}
+            row = {k: q.get(k) for k in ("source_id", "qid", "query", "split")}
             row["greedy"] = decode(greedy[i])
             row["samples"] = [decode(ids) for ids in sampled[i * args.G:(i + 1) * args.G]]
             row["sample_seed"] = args.seed + b
