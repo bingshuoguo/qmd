@@ -3,10 +3,13 @@
 Pool per source = scorable qids (in train-raw.jsonl), minus
   - queries the policy saw in SFT (v2-VH sft-train.jsonl): by qid within the source and by normalized text,
   - any eval query (fiqa-test, scifact-test, android) by normalized text,
-  - ceiling queries (raw nDCG@10 == 1): no expansion can improve them.
+  - ceiling queries (raw nDCG@10 == 1): no expansion can improve them,
+  - with --drop-r30-zero, queries with raw R@30 == 0 (reward can only be >= 0; mostly label gaps).
 Then up to --per-source qids (seed 42), split 70/30 by qid within each source.
 
   python select_queries.py --train-raw <train-raw.jsonl> --sft <sft-train.jsonl> --out <dir>
+  # GRPO training pool: every eligible query, no split
+  python select_queries.py ... --drop-r30-zero --per-source 1000000 --test-frac 0 --out <dir>
 """
 import argparse
 import json
@@ -31,6 +34,7 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--per-source", type=int, default=250)
 ap.add_argument("--test-frac", type=float, default=0.3)
 ap.add_argument("--seed", type=int, default=42)
+ap.add_argument("--drop-r30-zero", action="store_true")
 args = ap.parse_args()
 
 
@@ -50,11 +54,12 @@ eval_text = {norm(q["query"]) for d in EVAL for q in load(d / "queries.jsonl")}
 
 out = Path(args.out)
 out.mkdir(parents=True, exist_ok=True)
-manifest = {"seed": args.seed, "per_source": args.per_source, "test_frac": args.test_frac, "sources": {}}
+manifest = {"seed": args.seed, "per_source": args.per_source, "test_frac": args.test_frac,
+            "drop_r30_zero": args.drop_r30_zero, "sources": {}}
 rows = []
 for sid, (bench, sft_sid) in TRAIN.items():
     queries = load(PREPARED / bench / "queries.jsonl")
-    counts = {"queries": len(queries), "not_scorable": 0, "sft_seen": 0, "eval_text": 0, "ceiling": 0}
+    counts = {"queries": len(queries), "not_scorable": 0, "sft_seen": 0, "eval_text": 0, "ceiling": 0, "r30_zero": 0}
     pool = []
     for q in queries:
         r = raw.get((sid, q["qid"]))
@@ -66,6 +71,8 @@ for sid, (bench, sft_sid) in TRAIN.items():
             counts["eval_text"] += 1
         elif r["ndcg_at_10"] >= 1 - 1e-9:
             counts["ceiling"] += 1
+        elif args.drop_r30_zero and r["recall_at_30"] == 0:
+            counts["r30_zero"] += 1
         else:
             pool.append(q)
     rng = random.Random(f"{args.seed}:{sid}")
