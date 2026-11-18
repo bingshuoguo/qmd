@@ -11,7 +11,7 @@ and training data are **not in git** — they exist only on the local machine.
 | --- | --- | --- |
 | Main-line code | this tree | Search, distillation, SFT, OPD code kept after review |
 | Experiment-era code | tag `archive/completion-only-sft-20261104` | Historical prompts, legacy env profiles, SciFact pilot entry points, V2-A Pareto tooling, OpenAI teacher profile, GRPO-retrieval. `git checkout <tag> -- <path>` to recover |
-| Result artifacts | `artifacts/` (gitignored) | `sft-serving-baseline/` 16G, `sft-runs/` 3.2G, `grpo-retrieval-20261102/` 1.6G, `fusion-analysis/` |
+| Result artifacts | `artifacts/` (gitignored) | `sft-serving-baseline/` 16G, `sft-runs/` 3.2G, `grpo-retrieval-20261102/` 1.6G, `grpo-retrieval/` 1.5G, `fusion-analysis/` |
 | Training/distillation data | `finetune/data/` (gitignored) | `public-distill-v0` 4G, `public-distill-v1`, `-v2-vh`, `-v2-vh-prompt-v1`, `-v3-vh-pareto`, `nf-freshstack-v1`, `distillation/scifact-v1` (24 pilot runs) |
 | Local profiles | `.env.distill.*.local` (gitignored) | Credentials; never commit |
 
@@ -84,6 +84,7 @@ SFT adapter it compares is run 03 (`sft-teacher-8b.yaml`).
 
 `finetune/experiments/grpo-retrieval/` (archive tag only) plus results in
 `artifacts/grpo-retrieval-20261102/`. Judged not worth pursuing for now.
+Superseded by §7 (reward environment rebuilt, learnability gate and a GRPO run).
 
 ### 6. Post-merge SFT validation (2026-11-06 → 11-07)
 
@@ -109,3 +110,36 @@ touching non-global indexes.
 
 Evidence: `artifacts/sft-serving-baseline/merge-eval-20261106/` (local, not in
 git; index copy deleted after evaluation).
+
+### 7. GRPO retrieval reward, learnability gate and short run (2026-11-10 → 11-18)
+
+Code on branch `experiment/grpo` (not merged to main); full write-up in
+`finetune/experiments/grpo-retrieval/RESULTS.md`. Reward = ΔM of real path-A
+retrieval (M = 0.7·nDCG@10 + 0.3·R@30) from a multi-index reward server,
+verified bitwise against CUDA-regenerated oracles on an AutoDL 4090.
+
+Verdict: **GRPO does not help this task; within-group quality differences are
+not learnable.** Learnability gate (947 training-source queries × 8 samples):
+a Qwen3-1.7B LoRA reward model scores 0.464 [0.415, 0.513] pairwise accuracy
+on unseen queries (dev-selected lr 2e-5: 0.472), flat learning curve, RM-BoN-8
+−0.8pp vs greedy. GRPO from the v2-VH SFT model (cleaned pool of 4669 queries,
+300 steps, seed 42): −0.16pp ΔM vs SFT [−0.55, +0.23] on FiQA test / SciFact /
+CQADup Android (1647 queries); on-policy reward on unseen queries flat for all
+300 steps. Not done: best-of-N distillation, rerank path, second seed.
+
+Evidence: `artifacts/grpo-retrieval/` (local, not in git), indexed with sha256
+in `artifacts/grpo-retrieval/archive-manifest.json`:
+
+| Path | Size | Content |
+| --- | --- | --- |
+| `grpo-runs/s42-300/` | 92M | GRPO policy LoRA `final-adapter/`, `trainer_state.json` (every step), run log |
+| `grpo-runs/eval/` | 8.7M | SFT and GRPO greedy expansions on the 3 eval sets, scored |
+| `rm-gate-v1/` | 160M | gate RM adapters (`main/best`, `hp/lr2e-5/best`) and results of all 6 RM runs |
+| `gate-v1/` | 100M | gate samples (greedy + 8) scored, preference pairs, probes, embeddings |
+| `grpo-pool-v1/`, `eval-v1/` | 2M | cleaned GRPO training pool; eval query list; run scripts |
+| `autodl-acceptance-20261115/` | 17M | 4090 reward-server acceptance: CUDA oracles, sampled replay passes 1/2, scripts, server logs |
+| `index/` | 1.1G | 5 single-corpus indexes (rebuild with `setup-index.sh`) |
+
+Left only on the AutoDL data disk (released if the instance expires): GRPO
+optimizer states and checkpoints 50–250, RM adapters for frac25 / frac50 /
+gap02 / lr1e-5 (each retrains in 5–12 min).
