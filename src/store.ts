@@ -4074,8 +4074,11 @@ export function matchFilesByGlob(db: Database, pattern: string): { filepath: str
     FROM documents d
     JOIN content ON content.hash = d.hash
     WHERE d.active = 1
+    ORDER BY d.collection, d.path
   `);
-  // Large-result query: iterate to bound heap (all active docs)
+  // Large-result query: iterate to bound heap (all active docs). The order is
+  // explicit because scan order follows insertion, which follows the
+  // filesystem's readdir order and differs between macOS and Linux.
   const isMatch = picomatch(pattern);
   const results: { filepath: string; displayPath: string; bodyLength: number }[] = [];
   for (const f of stmt.iterate() as IterableIterator<{ virtual_path: string; body_length: number; path: string; collection: string }>) {
