@@ -19,7 +19,22 @@
 
 ## 1. 设置
 
-**评测集和检索**：与 SFT 历次评测相同。主集 FiQA test 648 / SciFact 300 / CQADup Android 699；分布外 CQADup Webmasters 506 / FreshStack test 101。使用 G0 index 副本（已迁移到分区向量布局），`INDEX_PATH` + 隔离的 `QMD_CONFIG_DIR`。两条检索路径：
+**评测集**分两组：
+
+- **主集**：G0、merge-eval、GRPO 一直沿用的三个评测集，可以和历次 SFT 结果直接对比。这组对我们的 SFT 是分布内的，它的蒸馏数据（`public-distill-v2-vh`）含同语料或同体裁的训练 query。
+- **分布外**：本次新增。定义是"两个模型的训练数据里都没有这个数据集"，用来检验 SFT 的领先是否只来自训练分布。
+
+| 组 | 数据集 | 条数 | 内容 | 我们 SFT 的训练数据中 |
+|---|---|---|---|---|
+| 主集 | FiQA test | 648 | 金融问答（理财、税务、投资） | fiqa-train 96 条，同一语料库 |
+| 主集 | SciFact | 300 | 科学论断检索（找支持或反驳的论文摘要） | scifact-train 2 条 |
+| 主集 | CQADup Android | 699 | StackExchange Android 论坛 | 无 Android；同体裁的 programmers 87 条、unix 104 条 |
+| 分布外 | CQADup Webmasters | 506 | StackExchange 站长论坛 | 无此论坛；但与 programmers/unix 同属 CQADupStack 论坛体裁，只算半个分布外 |
+| 分布外 | FreshStack test | 101 | 技术问题对应代码仓库文档，最接近 qmd 的实际用途 | 无 |
+
+官方模型一侧：5 个集合与它的训练数据（本地 `finetune/data/qmd_expansion_*.jsonl` 加 HF `tobil/qmd-query-expansion-train`，共 3027 条去重 query）精确匹配均为 0 条。
+
+**检索**：使用 G0 index 副本（已迁移到分区向量布局），`INDEX_PATH` + 隔离的 `QMD_CONFIG_DIR`。两条检索路径：
 
 - **rr**（线上路径）：rank fusion + Qwen3-Reranker-0.6B，candidate_limit 40。
 - **norr**（path A）：同一路径但关闭 rerank。最初用作快速筛查，最后全部跑完。
@@ -126,7 +141,7 @@ FreshStack query 000549（很长的 StackOverflow 式问题）在所有 arm 上�
 
 ## 4. 局限
 
-- **主集对 SFT 有分布内优势**：SFT 的蒸馏数据包含 fiqa-train、scifact-train、cqadup programmers/unix。官方本地训练数据（`finetune/data/qmd_expansion_*.jsonl`，2718 条）与 1647 条评测 query 精确匹配 0 条。分布外集合用来补这一点，但只有 607 条，rr 路径上 CI 偏宽。
+- **主集对 SFT 有分布内优势**：SFT 的蒸馏数据包含 fiqa-train、scifact-train、cqadup programmers/unix（§1）。分布外集合用来补这一点，但只有 607 条；其中 Webmasters 与 SFT 训练数据同体裁，FreshStack 在 rr 路径上还剔除了 1 条，所以 rr 路径上 CI 偏宽。
 - **offprod 只有一次无种子采样**（线上路径 T=0.7、不传 seed），没有估计采样方差。
 - **offq8 的"最好配置"是我们定义的**：预填空 think 块 + 末行换行可选，依据是模型不加文法时的自然输出。
 - 没有评测 HF 上的 f16，以及 `-sft` / `-grpo` 中间 checkpoint。
