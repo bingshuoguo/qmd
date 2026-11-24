@@ -79,7 +79,8 @@ describe("invalidateConfigCache", () => {
 
     invalidateConfigCache(db);
 
-    expect(db.prepare(`SELECT value FROM store_config WHERE key = 'config_hash'`).get()).toBeUndefined();
+    // No row: better-sqlite3 returns undefined, bun:sqlite returns null.
+    expect(db.prepare(`SELECT value FROM store_config WHERE key = 'config_hash'`).get() ?? undefined).toBeUndefined();
     const other = db.prepare(`SELECT value FROM store_config WHERE key = 'other_key'`).get() as { value: string } | undefined;
     expect(other?.value).toBe("x");
   });

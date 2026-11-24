@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 import {
   createStore,
   hybridQuery,
+  insertEmbedding,
   retrieveForBenchmark,
   type SearchResult,
   type Store,
@@ -394,6 +395,7 @@ describe("v2 runner artifacts", () => {
     const root = writeV2Fixture();
     mkdirSync(join(root, "corpus"));
     const { store } = controlledStore();
+    store.ensureVecTable(1);
     const now = "2026-01-01T00:00:00.000Z";
     store.db.prepare(`
       INSERT INTO store_collections (name, path, pattern)
@@ -410,13 +412,7 @@ describe("v2 runner artifacts", () => {
           (collection, path, title, hash, created_at, modified_at, active)
         VALUES (?, ?, ?, ?, ?, ?, 1)
       `).run("qmd-expansion-scifact-v1", path, path, hashValue, now, now);
-      store.db.prepare(`
-        INSERT INTO content_vectors
-          (hash, seq, pos, model, embed_fingerprint, total_chunks, embedded_at)
-        VALUES (?, 0, 0, ?, ?, 1, ?)
-      `).run(hashValue, "test-embedding", "fingerprint", now);
-      store.db.prepare("INSERT INTO vectors_by_collection (hash_seq, embedding) VALUES (?, ?)")
-        .run(`${hashValue}_0`, Buffer.from([byte, 0, 0, 0]));
+      insertEmbedding(store.db, hashValue, 0, 0, new Float32Array([byte]), "test-embedding", now, 1, "fingerprint");
     }
     try {
       const benchmark = loadBenchmarkV2(root);
@@ -444,12 +440,11 @@ describe("v2 runner artifacts", () => {
       const expectedFingerprint = createHash("sha256")
         .update("D\0d1\0d1.md\0hash-1\n")
         .update("D\0d2\0d2.md\0hash-2\n")
-        .update(vectorRecord("d1", Buffer.from([1, 0, 0, 0])))
-        .update(vectorRecord("d2", Buffer.from([2, 0, 0, 0])))
+        .update(vectorRecord("d1", Buffer.from(new Float32Array([1]).buffer)))
+        .update(vectorRecord("d2", Buffer.from(new Float32Array([2]).buffer)))
         .digest("hex");
       expect(first.index_fingerprint).toBe(expectedFingerprint);
-      store.db.prepare("UPDATE vectors_by_collection SET embedding = ? WHERE hash_seq = ?")
-        .run(Buffer.from([9, 0, 0, 0]), "hash-2_0");
+      insertEmbedding(store.db, "hash-2", 0, 0, new Float32Array([9]), "test-embedding", now, 1, "fingerprint");
       const second = inspectBenchmarkIndex(store, root, benchmark, profile);
       expect(second.index_fingerprint).not.toBe(first.index_fingerprint);
     } finally {
