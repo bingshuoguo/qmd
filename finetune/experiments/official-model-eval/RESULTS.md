@@ -2,7 +2,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 日期 | 2026-11-23 → 11-24 |
+| 日期 | 2026-11-23 → 11-24（offfix 补充于 11-24） |
 | 分支 | `experiment/official-model-eval`（从 main `2ad5c78` 切出） |
 | 被测模型 | `tobil/qmd-query-expansion-1.7B-gguf` @ `7816de0`（qmd 的默认 generate 模型） |
 | 对照 | 我们的 v2-VH SFT final-adapter，Q8_0，G0 profile D（无 system prompt、greedy） |
@@ -15,7 +15,7 @@
 
 1. **线上路径（rank fusion + rerank），主评测集 1647 条**：官方模型比不扩展 nDCG@10 低 1.0pp（显著），只有 R@30 +0.9pp（显著）。我们的 SFT 比官方 nDCG@10 高 1.4pp、R@10 高 1.7pp（都显著），R@30 高 0.7pp（不显著）。
 2. **两个模型都没训练过的集合（Webmasters + FreshStack，607 条）**：线上路径上 SFT 比官方 nDCG@10 +0.6pp、R@30 +2.4pp，都不显著（样本少，CI 宽）。不 rerank 的 path A 上两项都显著（+1.8pp、+3.1pp）。所以 SFT 的优势不只来自训练分布。
-3. **官方模型的问题出在模型本身，不在部署配置。** 用 Q8、贴合训练格式的最好配置，和 qmd 线上默认配置（Q4、默认 system prompt、T=0.7）相比，所有指标都没有显著差别。
+3. **官方模型的问题出在模型本身，不在部署配置。** 用 Q8、贴合训练格式的最好配置，和 qmd 线上默认配置（Q4、默认 system prompt、T=0.7）相比，所有指标都没有显著差别；单独去掉线上配置里的 `</think>` 泄漏，各指标变化也都在 ±0.3pp 以内（§3.2）。
 
 ## 1. 设置
 
@@ -35,6 +35,7 @@
 | offq8 | 官方 Q8_0，训练格式 prompt、无 system turn，预填它自己会输出的空 think 块，greedy，lex/vec/hyde 行文法（末行换行可选） | 官方模型的最好配置 |
 | offvh | offq8 去掉 lex 行（不重新生成） | 只比 vec+hyde 的质量；lex 有没有用 |
 | offprod | 官方 Q4_K_M，走 qmd 线上默认路径（`finetune/benchmarks/expand.ts --model hf:...`） | 用户现在实际拿到的效果 |
+| offfix | offprod 删掉 `</think>` 泄漏（`derive_noleak.py`，不重新生成，其余逐字不变） | 修掉 §3.2 的文法泄漏能否改善检索 |
 
 **可复现性检查**：rr 路径的 raw 在 FiQA（648/648）和 SciFact（300/300）上 top-30 排名与 merge-eval 完全相同，SFT 在 FiQA 上也是 648/648 相同。因此 SciFact/Android 的 raw 和 sft 两个 rr arm 直接复用了 merge-eval 的结果（扩展文件逐字节相同）。path A 的 raw/sft 与 G0 step 3 数值一致（FiQA 0.3931 vs 0.3930，SciFact 完全相同）。
 
@@ -110,7 +111,14 @@ lex 行是 vec 行的前 2–3 个词（"What is the"、"How can i"），hyde �
 
 - 渲染的 prompt 与训练格式逐字一致（node-llama-cpp Qwen wrapper，已用 `probe-template.ts` 核对），问题只在文法。
 - 把末行换行改为可选（`root ::= line ("\n" line)* "\n"?`）后泄漏为 0/20，输出与无文法时一致（`probe-nogrammar.ts`）。我们的 VH 文法本来就把末行换行设为可选，所以 SFT 不受影响。
-- 这个泄漏对检索的单独影响没有拆出来：offprod 和 offq8 同时差在量化、system prompt、采样和泄漏几项上，合计差别不显著。
+- **修掉泄漏对检索没有帮助。** offfix 与 offprod 只差在泄漏这一项（2254 条中 1482 条被改动：FiQA 479 / SciFact 184 / Android 427 / Webmasters 365 / FreshStack 27）。配对 bootstrap，宏平均 Δ（offfix − offprod）：
+
+  | 路径 | 主集 nDCG@10 | 主集 R@10 | 主集 R@30 | 分布外 nDCG@10 | 分布外 R@30 |
+  |---|---|---|---|---|---|
+  | rr | −0.0005 | −0.0007 | **−0.0017** [−0.0035, −0.0002] | −0.0006 | **−0.0029** [−0.0063, −0.0004] |
+  | norr | +0.0008 | +0.0023 | **−0.0024** [−0.0050, −0.0002] | +0.0001 | +0.0019 |
+
+  所有差值都在 ±0.3pp 以内；几个显著的 R@30 差值方向还是负的，但量级可以忽略。`</think>` 只是 hyde 行末尾的一个 token，只进入这一行的向量检索，对一段文本的 embedding 影响很小。所以文法泄漏是一个输出格式问题，不是官方模型效果差的原因（原因见 §3.1）。
 
 ### 3.3 rerank 路径的上下文溢出
 
@@ -127,13 +135,15 @@ FreshStack query 000549（很长的 StackOverflow 式问题）在所有 arm 上�
 
 - 默认 generate 模型目前在这套评测上**对排序是负贡献**：线上 rerank 路径 nDCG@10 −0.9pp，FTS-only/vsearch 这类不 rerank 的路径伤害更大。
 - 我们的 v2-VH SFT（Q8 + profile D）是现成的替代：同样 1.7B，主集 R@30 +1.6pp、分布外 R@30 +4.0pp（都显著），排序不退化。
-- 可以独立修的小问题（未改代码）：§3.2 默认文法的末行换行；§3.3 超长 query 的 rerank 截断。
+- 可以独立修的小问题（未改代码）：§3.2 默认文法的末行换行（只影响输出整洁，offfix 证明对检索无收益）；§3.3 超长 query 的 rerank 截断。
 
 ## 6. 复现
 
 ```sh
 # 生成（官方最好配置 / 线上配置 / SFT 分布外），写入 bench-rr/*/expansions/
 finetune/experiments/official-model-eval/gen-lane.sh
+# 去泄漏 arm：由 offprod 派生 offfix（每个数据集一次）
+python3 finetune/experiments/official-model-eval/derive_noleak.py artifacts/official-model-eval/bench-rr/<dataset-dir> <tag>
 # 检索：rr 和 norr 各一组；多条 lane 共享同一列表，用 runs/.claims/ 原子认领
 finetune/experiments/official-model-eval/retrieve-lane-claim.sh bench-rr  <tag:arm> ...
 finetune/experiments/official-model-eval/retrieve-lane-claim.sh bench-norr <tag:arm> ...

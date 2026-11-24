@@ -25,11 +25,13 @@ ARMS = {
     "offq8": lambda t: f"offq8-{t}-*",
     "offvh": lambda t: f"offvh-{t}-*",
     "offprod": lambda t: f"offprod-{t}-*",
+    "offfix": lambda t: f"offfix-{t}-*",
 }
 COMPARISONS = [
     ("offq8", "raw"), ("sft", "raw"), ("sft", "offq8"),
     ("offvh", "offq8"), ("sft", "offvh"),
     ("offprod", "raw"), ("offq8", "offprod"),
+    ("offfix", "offprod"),
 ]
 METRICS = ("ndcg10", "r10", "r30")
 N_BOOT, SEED = 20000, 42

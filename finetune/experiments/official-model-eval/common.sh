@@ -14,5 +14,6 @@ run_of(){ case $2 in
   *) echo $2-$1;; esac; }
 label_of(){ case $1 in
   sft) echo local:D-q8-nosys-greedy;; offq8) echo official-q8-nosys-greedy;;
-  offvh) echo official-q8-nosys-greedy-nolex;; offprod) echo official-q4-prod-default;; esac; }
+  offvh) echo official-q8-nosys-greedy-nolex;; offprod) echo official-q4-prod-default;;
+  offfix) echo official-q4-prod-default-noleak;; esac; }
 ALL="fiqa scifact android webmasters freshstack"
